@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🤔 Questions & Support (Q&A)
+    url: https://github.com/YOUR_USERNAME/YOUR_REPO/discussions/categories/q-a
+    about: Please use GitHub Discussions for support questions. Issues are reserved for bugs and feature requests.
+
