@@ -63,7 +63,8 @@ jobs:
         run: |
           # --format=github permite que los errores aparezcan directamente 
           # en la pestaña "Files changed" de tu Pull Request
-          ruff check . --format=github
+          pip install ruff
+          ruff check .
 
       - name: Run Python API Tests
         run: |
