@@ -60,9 +60,11 @@ jobs:
           pip install .
 
       - name: Python Linting (Ruff)
-        uses: astral-sh/ruff-action@v1
-        with:
-          args: "check ."
+        run: |
+          pip install ruff
+          # Usamos --force-exclude para asegurar que ignore la carpeta /target de Rust
+          # Usamos --format=github para que los errores salgan bonitos en el log
+          python -m ruff check . --force-exclude --format=github
 
       - name: Run Python API Tests
         run: |
