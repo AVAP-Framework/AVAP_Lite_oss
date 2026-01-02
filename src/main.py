@@ -343,7 +343,7 @@ async def main():
     try:
         await asyncio.Event().wait()
     except KeyboardInterrupt:
-        print("\n👋 Server stopped")
+        print("\nServer stopped")
     finally:
         await db_pool.close()
 
