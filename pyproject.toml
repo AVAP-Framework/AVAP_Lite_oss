@@ -18,23 +18,20 @@ features = ["pyo3/extension-module"]
 module-name = "avap_lite_core"
 
 [tool.ruff]
-# Directorios a ignorar
-exclude = [
-    ".git",
-    ".venv",
-    "target",
-    "dist",
-]
-
-# Reglas de linter
-line-length = 88
 target-version = "py311"
+line-length = 100 # Un poco más flexible para código de servidor
+exclude = [".git", ".venv", "target", "dist"]
 
 [tool.ruff.lint]
-# Selecciona qué reglas aplicar
-# E: pycodestyle, F: Pyflakes, I: isort (orden de imports)
-select = ["E", "F", "I"]
-ignore = []
+# Añadimos "S" para que reconozca los ignores de seguridad y "B" para bugs comunes
+select = ["E", "F", "I", "S", "B"]
+# Forzamos los ignores
+ignore = [
+    "S102", # exec() es necesario para el compilador lite
+    "F841", # variables locales no usadas (común en parsers)
+    "E731", # asignación de lambdas
+    "B008", # Do not perform function calls in argument defaults (común en Tornado/FastAPI)
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["avap_lite", "avap_lite_core"]
