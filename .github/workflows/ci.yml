@@ -44,10 +44,13 @@ jobs:
 
       - name: Build and Install Rust Extension
         run: |
-          # Instalamos maturin dentro del entorno de python actual
-          pip install maturin
-          # Compilamos e instalamos el módulo de Rust
-          maturin develop --release
+          # 1. Compilar el proyecto de Rust y generar el paquete Python (.whl)
+          # El flag --out dist guarda el archivo generado en la carpeta /dist
+          maturin build --release --out dist
+
+          # 2. Instalar el paquete generado usando pip
+          # Usamos el comodín para instalar el archivo .whl que acaba de crear
+          pip install dist/*.whl
 
       - name: Run Tests
         run: |
