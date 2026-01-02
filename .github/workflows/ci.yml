@@ -56,6 +56,7 @@ jobs:
 
       - name: Initialize Test Database
         run: |
+          # Use -U postgres explicitly to avoid "role root does not exist"
           export PGPASSWORD=password
           psql -h localhost -U postgres -d avap_db -c "
             CREATE TABLE IF NOT EXISTS obex_dapl_functions (name TEXT PRIMARY KEY, code TEXT);
