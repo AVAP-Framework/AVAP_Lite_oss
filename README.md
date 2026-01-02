@@ -8,7 +8,7 @@ Our vision is to build a high-performance, production-grade execution environmen
 * **Persistence:** PostgreSQL for source of truth and Redis for distributed caching.
 * **Ops:** Kubernetes-native, Prometheus-monitored, and OpenTelemetry-traced.
 
-### urrent Status & Path to v1.0
+### Current Status & Path to v1.0
 We are currently executing the initial phases of our strategic plan:
 
 1.  **Foundational (Phases I-III):** Establishing the Tornado/Rust bridge and secure sandboxing.
