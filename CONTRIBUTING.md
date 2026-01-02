@@ -4,7 +4,7 @@ Thank you for your interest in contributing to AVAP Lite! This project is a spec
 
 ---
 
-## 🛠️ Technical Environment Setup
+## Technical Environment Setup
 
 Developing for this project requires configuring both Python and Rust ecosystems.
 
@@ -50,7 +50,7 @@ The execution flow is: **Source → Parser → Intermediate Representation (IR) 
 If you modify the Parser or the Bytecode format:
 
 1. Ensure backward compatibility with existing AVAP scripts.
-2. Update the instruction set documentation in `docs/architecture.md`.
+2. Update the instruction set documentation in `ARCHITECTURE.md`.
 3. Add a regression test for sandbox boundary verification.
 
 ### Quality Attributes (Success Criteria)
