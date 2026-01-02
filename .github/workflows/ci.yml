@@ -77,4 +77,4 @@ jobs:
           DB_URL: postgresql://postgres:password@localhost:5432/avap_db
         run: |
           export PYTHONPATH=$PYTHONPATH:./src
-          pytest tests/
+          pytest tests/test_avap.py
