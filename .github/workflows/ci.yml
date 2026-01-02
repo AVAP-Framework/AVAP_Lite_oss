@@ -55,16 +55,43 @@ jobs:
           pip install maturin ruff pytest pytest-asyncio tornado asyncpg redis
 
       - name: Initialize Test Database
+        env:
+          DB_URL: postgresql://postgres:password@localhost:5432/avap_db
         run: |
-          export PGPASSWORD=password
-          psql -h localhost -U postgres -d avap_db <<EOF
-            CREATE TABLE IF NOT EXISTS obex_dapl_functions (name TEXT PRIMARY KEY, code TEXT);
-            CREATE TABLE IF NOT EXISTS avap_bytecode (command_name TEXT PRIMARY KEY, bytecode BYTEA, source_hash TEXT);
-            
-            INSERT INTO obex_dapl_functions (name, code) VALUES 
-            ('addVar', 'self.conector.variables[task["properties"]["targetVarName"]] = task["properties"]["varValue"]'),
-            ('addResult', 'var_name = task["properties"]["sourceVariable"]\nself.conector.results[var_name] = self.conector.variables.get(var_name)')
-            ON CONFLICT (name) DO UPDATE SET code = EXCLUDED.code;
+          python3 - <<'EOF'
+          import asyncio
+          import asyncpg
+          import os
+
+          async def init():
+              conn = await asyncpg.connect(os.getenv("DB_URL"))
+              
+              # 1. Crear tablas
+              await conn.execute("""
+                  CREATE TABLE IF NOT EXISTS obex_dapl_functions (name TEXT PRIMARY KEY, code TEXT);
+                  CREATE TABLE IF NOT EXISTS avap_bytecode (command_name TEXT PRIMARY KEY, bytecode BYTEA, source_hash TEXT);
+              """)
+              
+              # 2. Definir funciones (Python strings multilínea sin problemas de escape)
+              functions = [
+                  ('addVar', 'self.conector.variables[task["properties"]["targetVarName"]] = task["properties"]["varValue"]'),
+                  ('addResult', """
+          var_name = task["properties"]["sourceVariable"]
+          self.conector.results[var_name] = self.conector.variables.get(var_name)
+                  """)
+              ]
+              
+              for name, code in functions:
+                  await conn.execute("""
+                      INSERT INTO obex_dapl_functions (name, code) 
+                      VALUES ($1, $2) 
+                      ON CONFLICT (name) DO UPDATE SET code = EXCLUDED.code
+                  """, name, code.strip())
+              
+              await conn.close()
+              print("Database initialized successfully with Python helper")
+
+          asyncio.run(init())
           EOF
 
       - name: Build and Install Rust Extension
