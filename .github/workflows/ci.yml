@@ -55,9 +55,9 @@ jobs:
 
       - name: Build & Install Rust Extension
         run: |
-          # El flag --interpreter asegura que use el binario exacto de esta acción
-          # El flag --release evita problemas con debug symbols en entornos limitados
-          maturin develop --interpreter python3 --release
+          # Instalamos el proyecto actual en modo editable o normal
+          # Esto activará automáticamente a maturin para compilar el código Rust
+          pip install .
 
       - name: Python Linting (Ruff)
         run: ruff check .
