@@ -40,21 +40,28 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Rust (needed for maturin)
+      # Necesitamos Rust aquí para que Maturin pueda compilar la VM
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install dependencies
+      - name: Install Build Tools
         run: |
           python -m pip install --upgrade pip
-          pip install ruff pytest tornado asyncpg redis maturin
-          # ESTA LÍNEA ES CLAVE: instala el módulo de Rust en el entorno de Python
-          maturin develop 
+          pip install maturin ruff pytest tornado asyncpg redis
+
+      - name: Build Rust Extension
+        run: |
+          # Esto compila el Rust core e instala el paquete en el venv de la Action
+          maturin develop
 
       - name: Python Linting (Ruff)
         run: ruff check .
 
       - name: Run Python API Tests
-        run: pytest tests/
+        run: |
+          # Aseguramos que pytest vea el código
+          export PYTHONPATH=$PYTHONPATH:.
+          pytest tests/
 
   # --- JOB 3: BUILD INTEGRATION ---
   build-integration:
