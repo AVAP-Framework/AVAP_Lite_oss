@@ -9,7 +9,7 @@ description = "AVAP Lite high-performance execution server with Rust VM"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    { name = "AVAP Framework Team" }
+    { name = "AVAP Sphere Team" }
 ]
 dependencies = [
     "tornado>=6.3",
@@ -18,9 +18,7 @@ dependencies = [
 ]
 
 [tool.maturin]
-# Este nombre DEBE coincidir con el [lib] name de tu Cargo.toml
 module-name = "avap_lite_core"
-# Indicamos que el código de Python está en la raíz o carpeta actual
 python-source = "."
 features = ["pyo3/extension-module"]
 
