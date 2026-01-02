@@ -60,11 +60,9 @@ jobs:
           pip install .
 
       - name: Python Linting (Ruff)
-        run: |
-          # --format=github permite que los errores aparezcan directamente 
-          # en la pestaña "Files changed" de tu Pull Request
-          pip install ruff
-          python -m ruff check .
+        uses: astral-sh/ruff-action@v1
+        with:
+          args: "check ."
 
       - name: Run Python API Tests
         run: |
