@@ -57,17 +57,16 @@ jobs:
       - name: Initialize Test Database
         run: |
           export PGPASSWORD=password
-          psql -h localhost -U postgres -d avap_db -c "
+          psql -h localhost -U postgres -d avap_db <<EOF
             CREATE TABLE IF NOT EXISTS obex_dapl_functions (name TEXT PRIMARY KEY, code TEXT);
             CREATE TABLE IF NOT EXISTS avap_bytecode (command_name TEXT PRIMARY KEY, bytecode BYTEA, source_hash TEXT);
             
-            -- Usamos $$ para evitar problemas de escape de comillas en Python
             INSERT INTO obex_dapl_functions (name, code) VALUES 
-            ('addVar', $$self.conector.variables[task['properties']['targetVarName']] = task['properties']['varValue']$$),
-            ('addResult', $$var_name = task['properties']['sourceVariable']
-            self.conector.results[var_name] = self.conector.variables.get(var_name)$$)
+            ('addVar', 'self.conector.variables[task["properties"]["targetVarName"]] = task["properties"]["varValue"]'),
+            ('addResult', 'var_name = task["properties"]["sourceVariable"]
+self.conector.results[var_name] = self.conector.variables.get(var_name)')
             ON CONFLICT (name) DO UPDATE SET code = EXCLUDED.code;
-          "
+          EOF
 
       - name: Build and Install Rust Extension
         run: |
