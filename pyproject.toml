@@ -5,8 +5,12 @@ build-backend = "maturin"
 [project]
 name = "avap_lite"
 version = "0.1.0"
-description = "AVAP Lite high-performance execution server"
+description = "AVAP Lite high-performance execution server with Rust VM"
+readme = "README.md"
 requires-python = ">=3.11"
+authors = [
+    { name = "AVAP Framework Team" }
+]
 dependencies = [
     "tornado>=6.3",
     "asyncpg>=0.28",
@@ -14,24 +18,12 @@ dependencies = [
 ]
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+# Este nombre DEBE coincidir con el [lib] name de tu Cargo.toml
 module-name = "avap_lite_core"
+# Indicamos que el código de Python está en la raíz o carpeta actual
+python-source = "."
+features = ["pyo3/extension-module"]
 
 [tool.ruff]
-target-version = "py311"
-line-length = 100 # Un poco más flexible para código de servidor
-exclude = [".git", ".venv", "target", "dist"]
-
-[tool.ruff.lint]
-# Añadimos "S" para que reconozca los ignores de seguridad y "B" para bugs comunes
-select = ["E", "F", "I", "S", "B"]
-# Forzamos los ignores
-ignore = [
-    "S102", # exec() es necesario para el compilador lite
-    "F841", # variables locales no usadas (común en parsers)
-    "E731", # asignación de lambdas
-    "B008", # Do not perform function calls in argument defaults (común en Tornado/FastAPI)
-]
-
-[tool.ruff.lint.isort]
-known-first-party = ["avap_lite", "avap_lite_core"]
+line-length = 88
+select = ["E", "F", "B"]
