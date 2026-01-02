@@ -40,10 +40,15 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install Rust (needed for maturin)
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install ruff pytest tornado asyncpg redis maturin
+          # ESTA LÍNEA ES CLAVE: instala el módulo de Rust en el entorno de Python
+          maturin develop 
 
       - name: Python Linting (Ruff)
         run: ruff check .

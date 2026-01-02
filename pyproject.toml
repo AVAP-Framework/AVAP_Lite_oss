@@ -5,10 +5,14 @@ build-backend = "maturin"
 [project]
 name = "avap_lite"
 version = "0.1.0"
-description = "High-performance AVAP execution engine"
+description = "AVAP Lite high-performance execution server"
 requires-python = ">=3.11"
 dependencies = [
     "tornado>=6.3",
     "asyncpg>=0.28",
-    "redis>=5.0"
+    "redis>=5.0",
 ]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "avap_lite_core"
