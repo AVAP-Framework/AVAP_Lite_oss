@@ -17,3 +17,5 @@ We are currently executing the initial phases of our strategic plan:
 
 > [!TIP]
 > **For the full technical specification, including detailed components, performance targets, and risk mitigation, please see our [Detailed Strategic Roadmap (ROADMAP.md)](./ROADMAP.md).**
+
+![CI](https://github.com/AVAP-Framework/AVAP_Lite_oss/actions/workflows/ci.yml/badge.svg)
