@@ -37,7 +37,7 @@ class TestAVAPFlow(AsyncHTTPTestCase):
     @gen_test
     async def test_avap_full_flow(self):
         payload = {
-            "script": "addVar(numero, \"123.45\")\naddResult(numero)",
+            "script": "addVar(numero, 123.45)\naddResult(numero)",
             "variables": {}
         }
         
