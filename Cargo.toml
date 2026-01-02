@@ -1,0 +1,13 @@
+[package]
+name = "avap_lite_core"
+version = "0.1.0"
+edition = "2021"
+
+# Esto es vital para que funcione con Python/Maturin
+[lib]
+name = "avap_lite_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+# PyO3 es el puente con Python
+pyo3 = { version = "0.20", features = ["extension-module"] }
