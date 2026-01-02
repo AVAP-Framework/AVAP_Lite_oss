@@ -44,8 +44,10 @@ jobs:
 
       - name: Build and Install Rust Extension
         run: |
-          # Esto compila el código de Rust e inyecta el módulo en Python
-          maturin develop --interpreter python3
+          # Instalamos maturin dentro del entorno de python actual
+          pip install maturin
+          # Compilamos e instalamos el módulo de Rust
+          maturin develop --release
 
       - name: Run Tests
         run: |
