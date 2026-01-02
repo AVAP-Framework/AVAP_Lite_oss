@@ -58,9 +58,8 @@ class AVAPParser:
         
         return commands
     
-    def _parse_arguments(self, args_str: str) -> Dict[str, str]:
-        """Parse simple arguments"""
-        args = {}
+    def _parse_arguments(self, args_str: str) -> List[Any]:
+        """Parse arguments while preserving $variables and strings"""
         parts = []
         current = ''
         in_quote = False
@@ -80,16 +79,27 @@ class AVAPParser:
         if current:
             parts.append(current.strip())
         
-        for i, part in enumerate(parts):
-            if part:
-                # Remove quotes
-                if (part.startswith('"') and part.endswith('"')) or \
-                   (part.startswith("'") and part.endswith("'")):
-                    args[f'arg{i}'] = part[1:-1]
-                else:
-                    args[f'arg{i}'] = part
+        return [self._clean_value(p) for p in parts if p]
+
+    def _clean_value(self, value: str) -> Any:
+        """Strip quotes from strings and detect basic types"""
+        value = value.strip()
         
-        return args
+        # Handle quoted strings
+        if (value.startswith('"') and value.endswith('"')) or \
+           (value.startswith("'") and value.endswith("'")):
+            return value[1:-1]
+        
+        # Try to convert to numeric if it's not a variable ($var)
+        if not value.startswith('$'):
+            try:
+                if '.' in value:
+                    return float(value)
+                return int(value)
+            except ValueError:
+                pass
+                
+        return value
 
 # ========== SIMPLIFIED EXECUTOR ==========
 class AVAPExecutor:
@@ -99,39 +109,28 @@ class AVAPExecutor:
         self.db_pool = db_pool
         self.compiler = AVAPCompiler()
         self.parser = AVAPParser()
-        
-        # Simple in-memory cache
         self.bytecode_cache: Dict[str, bytes] = {}
     
     async def execute_script(self, script: str, variables: Dict[str, Any]) -> Dict[str, Any]:
         """Execute full script"""
-        # 1. Parse to AVAP Code
         commands = self.parser.parse(script)
-        
-        # 2. Prepare context
         context = {
             'variables': variables.copy(),
             'results': {},
             'logs': []
         }
         
-        # 3. Execute each command
         for command in commands:
             cmd_start = datetime.now()
-            
             try:
-                # Get bytecode
                 bytecode = await self._get_bytecode(command['type'])
-                
-                # Execute command
-                await self._execute_command(bytecode, command['properties'], context)
+                await self._execute_command(command['type'], bytecode, command['properties'], context)
                 
                 context['logs'].append({
                     'command': command['type'],
                     'duration_ms': (datetime.now() - cmd_start).total_seconds() * 1000,
                     'success': True
                 })
-                
             except Exception as e:
                 context['logs'].append({
                     'command': command['type'],
@@ -140,43 +139,33 @@ class AVAPExecutor:
                     'error': str(e)
                 })
                 raise
-        
         return context
     
     async def _get_bytecode(self, command_name: str) -> bytes:
         """Retrieve bytecode from cache or compile it"""
-        # 1. Check cache
         if command_name in self.bytecode_cache:
             return self.bytecode_cache[command_name]
         
-        # 2. Search in avap_bytecode table
         async with self.db_pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT bytecode FROM avap_bytecode WHERE command_name = $1",
                 command_name
             )
-            
             if row and row['bytecode']:
                 self.bytecode_cache[command_name] = row['bytecode']
                 return row['bytecode']
         
-        # 3. If it doesn't exist, get source code and compile
-        async with self.db_pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT code FROM obex_dapl_functions WHERE name = $1",
                 command_name
             )
-            
             if not row:
                 raise ValueError(f"Command not found: {command_name}")
             
             python_code = row['code']
-            
-            # 4. Compile
             compilation = self.compiler.compile(python_code, command_name)
             bytecode = compilation['bytecode']
             
-            # 5. Save to DB
             await conn.execute("""
                 INSERT INTO avap_bytecode (command_name, bytecode, source_hash)
                 VALUES ($1, $2, $3)
@@ -184,50 +173,46 @@ class AVAPExecutor:
                 DO UPDATE SET bytecode = EXCLUDED.bytecode
             """, command_name, bytecode, compilation['source_hash'])
             
-            # 6. Cache it
             self.bytecode_cache[command_name] = bytecode
-            
             return bytecode
     
-    async def _execute_command(self, bytecode: bytes, properties: Dict[str, Any], 
-                             context: Dict[str, Any]):
-        """Execute an individual command"""
-        # Decode bytecode (in Phase 1 it is Python code)
+    async def _execute_command(self, cmd_name: str, bytecode: bytes, properties: List[Any], context: Dict[str, Any]):
+        """Universal mapper to fix KeyError like 'sourceVariable', 'varValue', etc."""
         python_code = bytecode.decode('utf-8')
         
-        # Create simulated connector object
-        class FakeConector:
-            def __init__(self, context):
-                self.variables = context['variables']
-                self.results = context['results']
-                self.logger = self
+        # 1. Base dictionary with positional keys
+        prop_dict = {str(i): v for i, v in enumerate(properties)}
+        
+        # 2. Universal Alias Mapping
+        if len(properties) >= 1:
+            first_arg = properties[0]
+            aliases = [
+                'targetVarName', 'varName', 'name', 
+                'sourceVariable', 'variableName', 'key' # Fixes 'sourceVariable'
+            ]
+            for alias in aliases:
+                prop_dict[alias] = first_arg
             
-            def info(self, msg):
+        if len(properties) >= 2:
+            second_arg = properties[1]
+            aliases = ['value', 'varValue', 'val', 'newValue', 'content']
+            for alias in aliases:
+                prop_dict[alias] = second_arg
+
+        class FakeConector:
+            def __init__(self, ctx): 
+                self.variables, self.results, self.logger = ctx['variables'], ctx['results'], self
+            def info(self, msg): 
                 print(f"[INFO] {msg}")
         
-        # Create task (as in your current system)
-        task = {'properties': properties}
-        
-        # Safe namespace
         namespace = {
-            'task': task,
+            'task': {'properties': prop_dict},
             'self': type('obj', (object,), {'conector': FakeConector(context)}),
-            '__builtins__': {
-                'str': str,
-                'int': int,
-                'float': float,
-                'bool': bool,
-                'print': print,
-                'len': len
-            }
+            '__builtins__': {**__builtins__, 'print': print} if isinstance(__builtins__, dict) else {**__builtins__.__dict__, 'print': print}
         }
         
-        # EXECUTE code (This is TEMPORARY for Phase 1!)
-        # In Phase 2 we will replace this with Rust VM
+        # Ahora addResult(numero) encontrará 'sourceVariable' en prop_dict
         exec(python_code, namespace)
-        
-        # Update context with changes
-        # (Changes are already in FakeConector which references context)
 
 # ========== HTTP HANDLERS ==========
 class ExecuteHandler(tornado.web.RequestHandler):
@@ -235,9 +220,7 @@ class ExecuteHandler(tornado.web.RequestHandler):
         self.executor = executor
     
     async def post(self):
-        """Main execution endpoint"""
         try:
-            # Parse request
             data = json.loads(self.request.body)
             script = data.get("script", "")
             variables = data.get("variables", {})
@@ -245,84 +228,55 @@ class ExecuteHandler(tornado.web.RequestHandler):
             if not script:
                 raise ValueError("Script cannot be empty")
             
-            # Execute script
             result = await self.executor.execute_script(script, variables)
             
-            # Prepare response
-            response = {
+            self.write({
                 "success": True,
                 "result": result['results'],
                 "variables": result['variables'],
                 "logs": result['logs']
-            }
-            
-            self.write(response)
-            
+            })
         except Exception as e:
             self.set_status(400)
-            self.write({
-                "success": False,
-                "error": str(e)
-            })
+            self.write({"success": False, "error": str(e)})
 
 class HealthHandler(tornado.web.RequestHandler):
     async def get(self):
-        self.write({
-            "status": "healthy",
-            "service": "avap-server",
-            "version": "1.0.0"
-        })
+        self.write({"status": "healthy", "service": "avap-server", "version": "1.0.0"})
 
 class CompileHandler(tornado.web.RequestHandler):
-    """Endpoint to manually compile commands"""
-    
     def initialize(self, executor):
         self.executor = executor
     
     async def post(self):
         data = json.loads(self.request.body)
         command_name = data.get("command_name")
-        
         if not command_name:
             self.set_status(400)
             self.write({"error": "command_name is required"})
             return
-        
         try:
-            # Force compilation
             if command_name in self.executor.bytecode_cache:
                 del self.executor.bytecode_cache[command_name]
-            
             bytecode = await self.executor._get_bytecode(command_name)
-            
-            self.write({
-                "success": True,
-                "command": command_name,
-                "bytecode_size": len(bytecode)
-            })
+            self.write({"success": True, "command": command_name, "bytecode_size": len(bytecode)})
         except Exception as e:
             self.set_status(400)
             self.write({"error": str(e)})
 
 # ========== MAIN SERVER ==========
 async def main():
-    """Main function"""
     tornado.options.parse_command_line()
-    
     print("Starting AVAP Server...")
     
-    # 1. Connect to PostgreSQL
     db_pool = await asyncpg.create_pool(
         options.db_url,
         min_size=2,
         max_size=10
     )
-    print("Downloading definitions")
     
-    # 2. Create executor
     executor = AVAPExecutor(db_pool)
     
-    # 3. Create Tornado application
     app = tornado.web.Application([
         (r"/api/v1/execute", ExecuteHandler, dict(executor=executor)),
         (r"/api/v1/compile", CompileHandler, dict(executor=executor)),
@@ -330,16 +284,9 @@ async def main():
         (r"/", tornado.web.RedirectHandler, {"url": "/health"})
     ])
     
-    # 4. Start server
     app.listen(options.port)
-    
     print(f" Server ready at http://localhost:{options.port}")
-    print("  Available endpoints:")
-    print("  POST /api/v1/execute - Execute AVAP script")
-    print("  POST /api/v1/compile - Compile specific command")
-    print("  GET  /health - Health check")
     
-    # 5. Keep server running
     try:
         await asyncio.Event().wait()
     except KeyboardInterrupt:
