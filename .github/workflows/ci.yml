@@ -63,8 +63,7 @@ jobs:
             
             INSERT INTO obex_dapl_functions (name, code) VALUES 
             ('addVar', 'self.conector.variables[task["properties"]["targetVarName"]] = task["properties"]["varValue"]'),
-            ('addResult', 'var_name = task["properties"]["sourceVariable"]
-self.conector.results[var_name] = self.conector.variables.get(var_name)')
+            ('addResult', 'var_name = task["properties"]["sourceVariable"]\nself.conector.results[var_name] = self.conector.variables.get(var_name)')
             ON CONFLICT (name) DO UPDATE SET code = EXCLUDED.code;
           EOF
 
