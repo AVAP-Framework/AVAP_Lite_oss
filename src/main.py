@@ -144,10 +144,13 @@ class AVAPParser:
             elif '=' in line:
                 target, expr = line.split('=', 1)
                 target, expr = target.strip(), expr.strip()
+
+                is_pure_command = '(' in expr and expr.endswith(')') and not any(op in expr for op in ['+', '-', '*', '/'])
                 
-                if '(' in expr and ')' in expr:
+                if is_pure_command:
                     cmd_name = expr[:expr.find('(')].strip()
-                    args = self._parse_arguments(expr[expr.find('(')+1:expr.rfind(')')])
+                    args_str = expr[expr.find('(')+1:expr.rfind(')')]
+                    args = self._parse_arguments(args_str)
                     stack[-1].append({'type': cmd_name, 'properties': args, 'context': target})
                 else:
                     stack[-1].append({'type': 'assign', 'context': target, 'properties': [expr]})
@@ -191,16 +194,19 @@ class AVAPParser:
         return [self._clean_value(p) for p in parts if p]
 
     def _clean_value(self, value: str) -> Any:
-        """Preserves quotes so the Executor can determine if it's a literal or a variable."""
         value = value.strip()
         
-        # Only try to convert to number if there are no quotes and it's not a variable.
-        if not value.startswith('$') and not value.startswith('"') and not value.startswith("'"):
-            try:
-                if '.' in value: return float(value)
-                return int(value)
-            except ValueError: pass
-                
+        # "If it has quotes, it is a string literal; we strip the quotes and return the value.
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            return value[1:-1]
+        
+        # If it is a pure number, cast it (or convert it)
+        try:
+            if '.' in value: return float(value)
+            return int(value)
+        except ValueError:
+            pass
+            
         return value
 
 # ========== SIMPLIFIED EXECUTOR ==========
@@ -253,13 +259,19 @@ class AVAPExecutor:
             args = self.parser._parse_arguments(args_str)
             sub_node = {'type': cmd_name, 'properties': args, 'context': None}
             return await self._execute_ast(sub_node, context)
+        
+        full_scope = {**context['variables'], **(self.function_local_vars or {})}
+        if p in full_scope:
+            return full_scope[p]
 
         # 2. "Is it a complex expression (Mathematics or Concatenation)?
         # "If it contains operators or quotes, we force Python evaluation.
         if any(op in p for op in ['+', '-', '*', '/', '%']) or '"' in p or "'" in p:
             full_scope = {**context['variables'], **(self.function_local_vars or {})}
             try:
-                return eval(p, {"__builtins__": {}}, full_scope)
+                safe_builtins = {"str": str, "int": int, "float": float, "len": len}
+                return eval(p, {"__builtins__": safe_builtins}, full_scope)
+                #return eval(p, {"__builtins__": {}}, full_scope)
             except:
                 pass
 
@@ -271,6 +283,41 @@ class AVAPExecutor:
         node_type = node.get('type')
         properties = node.get('properties', [])
         target = node.get("context")
+
+        if node_type == 'if':
+            var_name = properties[0]
+            expected = properties[1]
+            comp = properties[2] if len(properties) > 2 else "="
+            
+            actual = context['variables'].get(var_name)
+            
+            # Evaluación de condición
+            condition_met = False
+            if comp == "=": condition_met = (str(actual) == str(expected))
+            elif comp == "!=": condition_met = (str(actual) != str(expected))
+            
+            branch = "true" if condition_met else "false"
+            for child in node.get('branches', {}).get(branch, []):
+                await self._execute_ast(child, context)
+            return
+
+        if node_type == 'startLoop':
+            var_name = properties[0]
+            raw_start = await self._resolve_arg(properties[1], context)
+            raw_end = await self._resolve_arg(properties[2], context)
+            
+            # Ahora raw_end será 5, no "maximo"
+            start = int(raw_start)
+            end = int(raw_end)
+            
+            for i in range(start, end + 1):
+                context['variables'][var_name] = i
+                # IMPORTANT: Synchronize with DB connector
+                self.conector.variables[var_name] = i
+                
+                for child_node in node.get('sequence', []):
+                    await self._execute_ast(child_node, context)
+            return
 
         # 1. INTERNAL MANAGEMENT of 'return' KEYWORD (not a DB command)
         if node_type == 'return':
@@ -302,6 +349,11 @@ class AVAPExecutor:
                     # If the resolver returned a variable name, we fetch its actual value now
                     if isinstance(val, str) and val in current_scope:
                         val = current_scope[val]
+                    try:
+                        if isinstance(val, str) and val.isdigit():
+                            val = int(val)
+                    except:
+                        pass
                     new_locals[param_name] = val
 
             # Execution Stack
@@ -328,8 +380,31 @@ class AVAPExecutor:
         elif node_type == 'assign':
             expr = properties[0]
             full_scope = {**context['variables'], **(self.function_local_vars or {})}
+            safe_builtins = {"str": str, "int": int, "len": len, "float": float}
+            internal_func = None
+            for f_name in self.parser.functions:
+                if expr.startswith(f"{f_name}("):
+                    internal_func = f_name
+                    break
+
+            if internal_func:
+                # Extract the content inside the parentheses
+                start_p = expr.find("(") + 1
+                end_p = expr.rfind(")")
+                raw_args = expr[start_p:end_p]
+                
+                # Resolve the arguments (e.g., 10 + 5 -> 15)
+                resolved_args = eval(raw_args, {"__builtins__": safe_builtins}, full_scope)
+
+                node_call = {
+                    'type': internal_func,
+                    'properties': [resolved_args],
+                    'context': target
+                }
+                return await self._execute_ast(node_call, context)
+
             try:
-                value = eval(expr, {}, full_scope)
+                value = eval(expr, {"__builtins__": safe_builtins}, full_scope)
             except:
                 value = full_scope.get(expr, expr)
 
@@ -364,6 +439,9 @@ class AVAPExecutor:
             context["current_target"] = target
             await self._execute_command(node_type, bytecode, resolved_props, context, node_full=node, interface=interface)
 
+            context['variables'].update(self.conector.variables)
+            context['results'].update(self.conector.results)
+            
             res_val = context['variables'].get(target)
             context["current_target"] = None
             return res_val
@@ -377,12 +455,14 @@ class AVAPExecutor:
         print("Commands to execute:", [c['type'] for c in commands])
 
         context = {
-            'variables': variables.copy(),
+            'variables': variables, #.copy(),
             'results': {},
             'logs': [],
             'req': req
         }
         
+        self.conector = FakeConector(context)
+
         for node in commands:
             cmd_start = datetime.now()
             try:
@@ -480,7 +560,7 @@ class AVAPExecutor:
                 'sequence': node_full.get('sequence', []) if node_full else []
             },
             'self': type('obj', (object,), {
-                'conector': FakeConector(context),
+                'conector': self.conector, #FakeConector(context),
                 'process_step': process_step_sync 
             }),
             'tornado': tornado, 
@@ -522,7 +602,7 @@ class ExecuteHandler(tornado.web.RequestHandler):
 
 class HealthHandler(tornado.web.RequestHandler):
     async def get(self):
-        self.write({"status": "healthy", "service": "avap-server", "version": "1.0.30"})
+        self.write({"status": "healthy", "service": "avap-server", "version": "1.0.32"})
 
 class CompileHandler(tornado.web.RequestHandler):
     def initialize(self, executor):

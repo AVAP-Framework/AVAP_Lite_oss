@@ -25,11 +25,31 @@ CREATE TABLE IF NOT EXISTS avap_bytecode (
 
 -- Inserting commands
 INSERT INTO obex_dapl_functions (name, interface, code) VALUES
-('addVar', '[{"item":"targetVarName","type":"variable"},{"item":"varValue","type":"value"}]',
-'target = task["properties"]["targetVarName"]
-value = task["properties"]["varValue"]
-print(f"Setting {target} = {value}")
-self.conector.variables[target] = value'),
+(
+    'addVar', 
+    '[{"item":"targetVarName","type":"variable"},{"item":"varValue","type":"value"}]',
+    $body$
+target = task["properties"]["targetVarName"]
+raw_value = task["properties"]["varValue"]
+
+# Resolución Inteligente
+# 1. ¿Es una variable existente?
+if raw_value in self.conector.variables:
+    resolved_value = self.conector.variables[raw_value]
+# 2. ¿Es un número (string que representa un entero)?
+elif isinstance(raw_value, str) and raw_value.isdigit():
+    resolved_value = int(raw_value)
+# 3. ¿Es ya un número (int/float)?
+elif isinstance(raw_value, (int, float)):
+    resolved_value = raw_value
+# 4. En cualquier otro caso, es un literal
+else:
+    resolved_value = raw_value
+
+print(f"Setting {target} = {resolved_value}")
+self.conector.variables[target] = resolved_value
+$body$
+),
 
 ('addResult', '[{"item":"sourceVariable","type":"variable"}]',
 $body$

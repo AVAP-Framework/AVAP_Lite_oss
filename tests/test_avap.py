@@ -31,8 +31,8 @@ class TestAVAPFlow(AsyncHTTPTestCase):
         super().tearDown()
 
     # Proxy to act as the executor object inside the handler
-    async def execute_script(self, script, variables):
-        return await self.executor_obj.execute_script(script, variables)
+    async def execute_script(self, script, variables, req=None):
+        return await self.executor_obj.execute_script(script, variables, req=req)
 
     @gen_test
     async def test_avap_full_flow(self):
