@@ -110,30 +110,83 @@ class AVAPExecutor:
         self.compiler = AVAPCompiler()
         self.parser = AVAPParser()
         self.bytecode_cache: Dict[str, bytes] = {}
+
+    def _evaluate_condition(self, properties: Dict[str, Any], context: Dict[str, Any]) -> bool:
+        """
+        Evaluates a condition like if(variable, value, comparator)
+        comparator: '=', '!=', '<', '>', '<=', '>='
+        """
+        var_name = properties.get('variable')
+        var_value = properties.get('variableValue')
+        comparator = properties.get('comparator', '=')
+
+        actual_value = context['variables'].get(var_name, None)
+
+        if comparator == '=':
+            return actual_value == var_value
+        elif comparator == '!=':
+            return actual_value != var_value
+        elif comparator == '<':
+            return actual_value < var_value
+        elif comparator == '>':
+            return actual_value > var_value
+        elif comparator == '<=':
+            return actual_value <= var_value
+        elif comparator == '>=':
+            return actual_value >= var_value
+        else:
+            raise ValueError(f"Unknown comparator: {comparator}")
+
+    async def _execute_ast(self, node: Dict[str, Any], context: Dict[str, Any]):
+        """
+        Executes one AST node, recursively for if/else and loops
+        """
+        node_type = node.get('type')
+
+        if node_type == 'if':
+            condition_met = self._evaluate_condition(node['properties'], context)
+            branch = node.get('branches', {}).get('true' if condition_met else 'false', [])
+            for child in branch:
+                await self._execute_ast(child, context)
+
+        elif node_type == 'loop':
+            start = int(node['properties']['from'])
+            end = int(node['properties']['to'])
+            var_name = node['properties']['varName']
+
+            for i in range(start, end):
+                context['variables'][var_name] = i
+                for child in node.get('sequence', []):
+                    await self._execute_ast(child, context)
+
+        else:
+            # Comando simple: addVar, addResult, sha256, etc.
+            bytecode = await self._get_bytecode(node_type)
+            await self._execute_command(node_type, bytecode, node.get('properties', {}), context)
+
     
-    async def execute_script(self, script: str, variables: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_script(self, script: str, variables: Dict[str, Any], req=None) -> Dict[str, Any]:
         """Execute full script"""
         commands = self.parser.parse(script)
         context = {
             'variables': variables.copy(),
             'results': {},
-            'logs': []
+            'logs': [],
+            'req': req
         }
         
-        for command in commands:
+        for node in commands:
             cmd_start = datetime.now()
             try:
-                bytecode = await self._get_bytecode(command['type'])
-                await self._execute_command(command['type'], bytecode, command['properties'], context)
-                
+                await self._execute_ast(node, context)
                 context['logs'].append({
-                    'command': command['type'],
+                    'command': node.get('type'),
                     'duration_ms': (datetime.now() - cmd_start).total_seconds() * 1000,
                     'success': True
                 })
             except Exception as e:
                 context['logs'].append({
-                    'command': command['type'],
+                    'command': node.get('type'),
                     'duration_ms': (datetime.now() - cmd_start).total_seconds() * 1000,
                     'success': False,
                     'error': str(e)
@@ -200,15 +253,41 @@ class AVAPExecutor:
                 prop_dict[alias] = second_arg
 
         class FakeConector:
-            def __init__(self, ctx): 
-                self.variables, self.results, self.logger = ctx['variables'], ctx['results'], self
-            def info(self, msg): 
+            def __init__(self, ctx):
+                self.variables = ctx['variables']
+                self.results = ctx['results']
+                self.logger = self
+                self.req = ctx.get('req')  # <- aquí añadimos req
+            def info(self, msg):
                 print(f"[INFO] {msg}")
+
+            def get_param(self, name):
+                """Recupera parámetros de query o body según el request"""
+                req = self.req
+                # 1. Buscar en query arguments
+                if req and hasattr(req, 'query_arguments'):
+                    if name.encode() in req.query_arguments:
+                        return req.query_arguments[name.encode()][0].decode()
+                # 2. Buscar en body como JSON
+                if req and hasattr(req, 'body'):
+                    try:
+                        body_data = json.loads(req.body)
+                        if name in body_data:
+                            return body_data[name]
+                    except:
+                        pass
+                # 3. Buscar en body_arguments (form data)
+                if req and hasattr(req, 'body_arguments'):
+                    if name.encode() in req.body_arguments:
+                        return req.body_arguments[name.encode()][0].decode()
+                return None
         
         namespace = {
             'task': {'properties': prop_dict},
             'self': type('obj', (object,), {'conector': FakeConector(context)}),
-            '__builtins__': {**__builtins__, 'print': print} if isinstance(__builtins__, dict) else {**__builtins__.__dict__, 'print': print}
+            '__builtins__': {**__builtins__, 'print': print} 
+                        if isinstance(__builtins__, dict) 
+                        else {**__builtins__.__dict__, 'print': print}
         }
         
         # Ahora addResult(numero) encontrará 'sourceVariable' en prop_dict
@@ -228,7 +307,7 @@ class ExecuteHandler(tornado.web.RequestHandler):
             if not script:
                 raise ValueError("Script cannot be empty")
             
-            result = await self.executor.execute_script(script, variables)
+            result = await self.executor.execute_script(script, variables, req=self)
             
             self.write({
                 "success": True,
@@ -242,7 +321,7 @@ class ExecuteHandler(tornado.web.RequestHandler):
 
 class HealthHandler(tornado.web.RequestHandler):
     async def get(self):
-        self.write({"status": "healthy", "service": "avap-server", "version": "1.0.0"})
+        self.write({"status": "healthy", "service": "avap-server", "version": "1.0.2"})
 
 class CompileHandler(tornado.web.RequestHandler):
     def initialize(self, executor):
