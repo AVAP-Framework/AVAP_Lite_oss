@@ -61,7 +61,7 @@ jobs:
         run: |
           # 1. Usar el cliente de postgres para ejecutar tu archivo init.sql real
           # Asumiendo que init.sql está en la raíz o en una carpeta 'sql/'
-          psql -h localhost -U postgres -d avap_db -f path/to/init.sql
+          psql -h localhost -U postgres -d avap_db -f init.sql
 
           # 2. Opcional: Verificar que las funciones se cargaron
           psql -h localhost -U postgres -d avap_db -c "SELECT name FROM obex_dapl_functions;"
