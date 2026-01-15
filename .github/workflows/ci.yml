@@ -58,41 +58,12 @@ jobs:
         env:
           DB_URL: postgresql://postgres:password@localhost:5432/avap_db
         run: |
-          python3 - <<'EOF'
-          import asyncio
-          import asyncpg
-          import os
+          # 1. Usar el cliente de postgres para ejecutar tu archivo init.sql real
+          # Asumiendo que init.sql está en la raíz o en una carpeta 'sql/'
+          psql -h localhost -U postgres -d avap_db -f path/to/init.sql
 
-          async def init():
-              conn = await asyncpg.connect(os.getenv("DB_URL"))
-              
-              # 1. Crear tablas
-              await conn.execute("""
-                  CREATE TABLE IF NOT EXISTS obex_dapl_functions (name TEXT PRIMARY KEY, code TEXT);
-                  CREATE TABLE IF NOT EXISTS avap_bytecode (command_name TEXT PRIMARY KEY, bytecode BYTEA, source_hash TEXT);
-              """)
-              
-              # 2. Definir funciones (Python strings multilínea sin problemas de escape)
-              functions = [
-                  ('addVar', 'self.conector.variables[task["properties"]["targetVarName"]] = task["properties"]["varValue"]'),
-                  ('addResult', """
-          var_name = task["properties"]["sourceVariable"]
-          self.conector.results[var_name] = self.conector.variables.get(var_name)
-                  """)
-              ]
-              
-              for name, code in functions:
-                  await conn.execute("""
-                      INSERT INTO obex_dapl_functions (name, code) 
-                      VALUES ($1, $2) 
-                      ON CONFLICT (name) DO UPDATE SET code = EXCLUDED.code
-                  """, name, code.strip())
-              
-              await conn.close()
-              print("Database initialized successfully with Python helper")
-
-          asyncio.run(init())
-          EOF
+          # 2. Opcional: Verificar que las funciones se cargaron
+          psql -h localhost -U postgres -d avap_db -c "SELECT name FROM obex_dapl_functions;"
 
       - name: Build and Install Rust Extension
         run: |
