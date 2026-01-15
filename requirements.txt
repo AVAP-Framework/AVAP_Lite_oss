@@ -2,3 +2,4 @@ tornado==6.3.3
 asyncpg==0.29.0
 psycopg2-binary>=2.9
 pyyaml>=6.0
+nest-asyncio==1.5.8

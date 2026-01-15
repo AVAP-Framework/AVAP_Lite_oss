@@ -9,6 +9,9 @@ import hashlib
 from datetime import datetime
 from typing import Dict, Any, List
 
+import nest_asyncio
+nest_asyncio.apply() 
+
 import tornado.web
 import tornado.ioloop
 from tornado.options import define, options
@@ -18,6 +21,39 @@ import asyncpg
 define("port", default=8888, help="Server Port")
 define("db_url", default="postgresql://postgres:password@postgres/avap_db", 
        help="PostgreSQL URL")
+
+
+class FakeConector:
+    def __init__(self, ctx):
+        self.variables = ctx['variables']
+        self.function_local_vars = ctx.get('function_local_vars', {})
+        self.results = ctx['results']
+        self.logger = self
+        self.req = ctx.get('req')
+    def info(self, msg):
+        print(f"[INFO] {msg}")
+
+    def get_param(self, name):
+        """Retrieve query or body parameters depending on the request."""
+        req = self.req
+        # 1. Search in query arguments
+        if req and hasattr(req, 'query_arguments'):
+            if name.encode() in req.query_arguments:
+                return req.query_arguments[name.encode()][0].decode()
+        # 2. Search in body as JSON
+        if req and hasattr(req, 'body'):
+            try:
+                body_data = json.loads(req.body)
+                if name in body_data:
+                    return body_data[name]
+            except:
+                pass
+        # 3. Search in body_arguments (form data)
+        if req and hasattr(req, 'body_arguments'):
+            if name.encode() in req.body_arguments:
+                return req.body_arguments[name.encode()][0].decode()
+        return None
+            
 
 # ========== SIMPLIFIED COMPILER ==========
 class AVAPCompiler:
@@ -38,6 +74,7 @@ class AVAPParser:
     def parse(self, script: str) -> List[Dict[str, Any]]:
         lines = script.strip().split('\n')
         commands = []
+        stack = [commands] 
         i = 0
         while i < len(lines):
             line = lines[i].strip()
@@ -45,83 +82,81 @@ class AVAPParser:
                 i += 1
                 continue
 
-            # ==== 1. DETECCIÓN EXPLÍCITA DE RETURN ====
-            if line.startswith('return '):
-                value = line[len('return '):].strip()
-                commands.append({
-                    'type': 'return',
-                    'properties': [value], # Guardamos el nombre de la var como primer elemento
-                    'context': None
-                })
+            # ==== CONDITIONALS BLOCKS ====
+            if line.startswith('if(') or line.startswith('if ('):
+                args_str = line[line.find('(')+1:line.rfind(')')]
+                args = self._parse_arguments(args_str)
+                if_node = {'type': 'if', 'properties': args, 'branches': {'true': [], 'false': []}}
+                stack[-1].append(if_node)
+                stack.append(if_node['branches']['true'])
+                i += 1
+                continue
+            
+            elif line.startswith('else()') or line.startswith('else ('):
+                if len(stack) > 1:
+                    stack.pop() 
+                    if_node = stack[-1][-1]
+                    stack.append(if_node['branches']['false'])
                 i += 1
                 continue
 
-            # ==== Definición de función ====
+            elif line.startswith('end()') or line.startswith('endLoop()'):
+                if len(stack) > 1:
+                    stack.pop()
+                i += 1
+                continue
+
+            # ==== LOOPS BLOCKS ====
+            elif line.startswith('startLoop('):
+                args_str = line[line.find('(')+1:line.rfind(')')]
+                args = self._parse_arguments(args_str)
+                loop_node = {'type': 'startLoop', 'properties': args, 'sequence': []}
+                stack[-1].append(loop_node)
+                stack.append(loop_node['sequence'])
+                i += 1
+                continue
+
+            # ==== FUNCTIONS DEFINITIONS ====
             if line.startswith('function '):
                 header = line[len('function '):].strip()
                 name = header[:header.find('(')].strip()
                 params = header[header.find('(')+1:header.find(')')].split(',')
                 params = [p.strip() for p in params if p.strip()]
-
                 i += 1
-                body_lines = []
-                brace_count = 1
+                body_lines, brace_count = [], 1
                 while i < len(lines) and brace_count > 0:
                     l = lines[i]
                     if '{' in l: brace_count += l.count('{')
                     if '}' in l: brace_count -= l.count('}')
                     body_lines.append(l)
                     i += 1
-                body = '\n'.join(body_lines[:-1])
-
-                body_ast = self.parse(body)
-
-                # Buscar variable de retorno para la metadata de la función
-                return_var = None
-                for node in body_ast:
-                    if node.get('type') == 'return':
-                        # Tomamos el primer elemento de la lista de propiedades
-                        return_var = node['properties'][0] if node['properties'] else None
-
+                body_ast = self.parse('\n'.join(body_lines[:-1]))
                 self.functions[name] = {
                     'params': params,
-                    'return': return_var,
+                    'return': next((n['properties'][0] for n in body_ast if n['type'] == 'return'), None),
                     'ast': body_ast
                 }
                 continue
 
-            # ==== Asignación o llamada a función/comando ====
-            if '=' in line:
+            # ==== ASSIGNMENTS AND COMMANS (pushed onto the top of the stack) ====
+            if line.startswith('return '):
+                stack[-1].append({'type': 'return', 'properties': [line[7:].strip()], 'context': None})
+            elif '=' in line:
                 target, expr = line.split('=', 1)
-                target = target.strip()
-                expr = expr.strip()
+                target, expr = target.strip(), expr.strip()
+                
                 if '(' in expr and ')' in expr:
                     cmd_name = expr[:expr.find('(')].strip()
-                    args_str = expr[expr.find('(')+1:expr.rfind(')')]
-                    args = self._parse_arguments(args_str)
-                    commands.append({
-                        'type': cmd_name,
-                        'properties': args,
-                        'context': target
-                    })
+                    args = self._parse_arguments(expr[expr.find('(')+1:expr.rfind(')')])
+                    stack[-1].append({'type': cmd_name, 'properties': args, 'context': target})
                 else:
-                    commands.append({
-                        'type': 'assign',
-                        'context': target,
-                        'properties': [expr]
-                    })
+                    stack[-1].append({'type': 'assign', 'context': target, 'properties': [expr]})
             else:
                 if '(' in line and ')' in line:
                     cmd_name = line[:line.find('(')].strip()
-                    args_str = line[line.find('(')+1:line.rfind(')')]
-                    args = self._parse_arguments(args_str)
-                    commands.append({
-                        'type': cmd_name,
-                        'properties': args,
-                        'context': None
-                    })
+                    args = self._parse_arguments(line[line.find('(')+1:line.rfind(')')])
+                    stack[-1].append({'type': cmd_name, 'properties': args, 'context': None})
             i += 1
-
         return commands
 
 
@@ -129,7 +164,7 @@ class AVAPParser:
     def _parse_arguments(self, args_str: str) -> List[Any]:
         parts = []
         current = ''
-        paren_level = 0  # <--- Nuevo: Seguimiento de paréntesis
+        paren_level = 0 
         in_quote = False
         quote_char = None
         
@@ -156,22 +191,15 @@ class AVAPParser:
         return [self._clean_value(p) for p in parts if p]
 
     def _clean_value(self, value: str) -> Any:
-        """Strip quotes from strings and detect basic types"""
+        """Preserves quotes so the Executor can determine if it's a literal or a variable."""
         value = value.strip()
         
-        # Handle quoted strings
-        if (value.startswith('"') and value.endswith('"')) or \
-           (value.startswith("'") and value.endswith("'")):
-            return value[1:-1]
-        
-        # Try to convert to numeric if it's not a variable ($var)
-        if not value.startswith('$'):
+        # Only try to convert to number if there are no quotes and it's not a variable.
+        if not value.startswith('$') and not value.startswith('"') and not value.startswith("'"):
             try:
-                if '.' in value:
-                    return float(value)
+                if '.' in value: return float(value)
                 return int(value)
-            except ValueError:
-                pass
+            except ValueError: pass
                 
         return value
 
@@ -184,6 +212,7 @@ class AVAPExecutor:
         self.compiler = AVAPCompiler()
         self.parser = AVAPParser()
         self.bytecode_cache: Dict[str, bytes] = {}
+        self.interface_cache: Dict[str, List] = {}
         self.function_local_vars: Dict[str, Any] = {}
 
     def _evaluate_condition(self, properties: Dict[str, Any], context: Dict[str, Any]) -> bool:
@@ -216,8 +245,8 @@ class AVAPExecutor:
         if not isinstance(p, str):
             return p
         
-        # 1. ¿Es una llamada a función pura? (ej: extra())
-        # Solo resolvemos si tiene paréntesis y NO tiene operadores matemáticos
+        # 1. s it a pure function call? (e.g., extra())
+        # We only resolve it if it has parentheses and NO mathematical operators.
         if '(' in p and ')' in p and not any(op in p for op in ['+', '-', '*', '/', '%']):
             cmd_name = p[:p.find('(')].strip()
             args_str = p[p.find('(')+1:p.rfind(')')]
@@ -225,8 +254,8 @@ class AVAPExecutor:
             sub_node = {'type': cmd_name, 'properties': args, 'context': None}
             return await self._execute_ast(sub_node, context)
 
-        # 2. ¿Es una expresión compleja (Matemáticas o Concatenación)?
-        # Si contiene operadores o comillas, forzamos la evaluación de Python
+        # 2. "Is it a complex expression (Mathematics or Concatenation)?
+        # "If it contains operators or quotes, we force Python evaluation.
         if any(op in p for op in ['+', '-', '*', '/', '%']) or '"' in p or "'" in p:
             full_scope = {**context['variables'], **(self.function_local_vars or {})}
             try:
@@ -234,9 +263,7 @@ class AVAPExecutor:
             except:
                 pass
 
-        # 3. SI ES UNA VARIABLE SIMPLE (ej: res_math)
-        # IMPORTANTE: Devolvemos el string tal cual (p) para que el comando 
-        # addResult(res_math) reciba el nombre de la variable y no su contenido.
+        # 3. IF A SIMPLE VARIABLE (ej: res_math)
         return p
     
 
@@ -245,61 +272,59 @@ class AVAPExecutor:
         properties = node.get('properties', [])
         target = node.get("context")
 
-        # 1. GESTIÓN INTERNA DEL RETURN (Keyword, no comando de DB)
+        # 1. INTERNAL MANAGEMENT of 'return' KEYWORD (not a DB command)
         if node_type == 'return':
-            # Buscamos el valor en el scope local o global
+            # Look up the value in the local or global scope
             var_name = properties[0] if properties else None
             full_scope = {**context['variables'], **(self.function_local_vars or {})}
             
             try:
-                # Evaluamos por si es una expresión (ej: return a + b)
+                # Evaluate to check if it is an expression (e.g., return a + b)
                 value = eval(str(var_name), {}, full_scope)
             except:
-                # Si falla, es un literal o el nombre de una variable
+                # If it fails, it is either a literal or a variable name
                 value = full_scope.get(var_name, var_name)
             
-            # Devolvemos un paquete especial que detiene la ejecución de la función
+            # Return a special packet that halts function execution
             return {"__return__": value}
 
-        # 2. LLAMADA A FUNCIÓN DEFINIDA (ej: mens = saludo("Rafa"))
+        # 2. USER-DEFINED FUNCTION CALL (e.g., mens = greet("Rafa"))
         if node_type in self.parser.functions:
             func = self.parser.functions[node_type]
             new_locals = {}
             
             current_scope = {**context['variables'], **(self.function_local_vars or {})}
 
-            # Pasar argumentos a la función
+            # Pass arguments to the function
             for i, param_name in enumerate(func['params']):
                 if i < len(properties):
                     val = await self._resolve_arg(properties[i], context)
-                    # Si el resolver devolvió un nombre de variable, obtenemos su valor real ahora
+                    # If the resolver returned a variable name, we fetch its actual value now
                     if isinstance(val, str) and val in current_scope:
                         val = current_scope[val]
                     new_locals[param_name] = val
 
-            # Stack de ejecución
+            # Execution Stack
             prev_locals = self.function_local_vars
             self.function_local_vars = new_locals
             func_value = None
 
-            # Ejecutar líneas de la función
+            # Execute function lines
             for child in func['ast']:
                 res = await self._execute_ast(child, context)
-                # Si un hijo devolvió el paquete __return__, capturamos el valor y rompemos
+                # "If a child returned the __return__ packet, we capture the value and break.
                 if isinstance(res, dict) and "__return__" in res:
                     func_value = res["__return__"]
                     break
             
             self.function_local_vars = prev_locals
             
-            # ¡AQUÍ ESTÁ LA MAGIA! 
-            # El valor que salió del 'return' se asigna a la variable externa (target)
             if target:
                 context['variables'][target] = func_value
             
             return func_value
 
-        # 3. ASIGNACIONES (ej: final_message = ...)
+        # 3. ASSIGNMENTS (e.g., final_message = ...)
         elif node_type == 'assign':
             expr = properties[0]
             full_scope = {**context['variables'], **(self.function_local_vars or {})}
@@ -313,29 +338,32 @@ class AVAPExecutor:
                 self.function_local_vars[target] = value
             return value
 
-        # 4. COMANDOS DE BASE DE DATOS (addVar, addResult...)
+        # 4. DATABASE COMMANDS
         else:
-            # Si el parser mandó un "return" aquí por error, lo redirigimos
+            # If the parser sent a 'return' here by mistake, we redirect it.
             if node_type == "return": 
                 return await self._execute_ast({'type': 'return', 'properties': properties}, context)
 
-            bytecode = await self._get_bytecode(node_type)
+            bytecode, interface = await self._get_bytecode(node_type)
             
             resolved_props = []
             for p in properties:
-                # REGLA DE ORO: 
-                # Si es una expresión compleja (tiene operadores) o una función anidada, la resolvemos.
-                # Si es una palabra simple (nombre de variable), la pasamos como string para que
-                # el comando de la DB (que usa .get()) funcione correctamente.
-                if isinstance(p, str) and (any(op in p for op in ['+', '-', '*', '/', '%']) or '(' in p):
+                # A. Is it a function or calculation? -> Resolve
+                if isinstance(p, str) and (('(' in p and ')' in p) or any(op in p for op in ['+', '-', '*', '/', '%'])):
                     resolved_props.append(await self._resolve_arg(p, context))
+                
+                # B. Is it a quoted literal? -> Strip quotes and pass the text
+                elif isinstance(p, str) and ((p.startswith('"') and p.endswith('"')) or (p.startswith("'") and p.endswith("'"))):
+                    resolved_props.append(p[1:-1])
+                
+                # C. "Is it an unquoted word (nombre, name)? -> Pass as is
+                # This allows the DB to use it as a KEY to look up variables.
                 else:
-                    # Pasamos el literal o el nombre de la variable tal cual
-                    resolved_props.append(p.strip('"\'') if isinstance(p, str) and (p.startswith('"') or p.startswith("'")) else p)
+                    resolved_props.append(p)
 
             context["current_target"] = target
-            await self._execute_command(node_type, bytecode, resolved_props, context)
-            
+            await self._execute_command(node_type, bytecode, resolved_props, context, node_full=node, interface=interface)
+
             res_val = context['variables'].get(target)
             context["current_target"] = None
             return res_val
@@ -374,28 +402,44 @@ class AVAPExecutor:
                 raise
         return context
     
-    async def _get_bytecode(self, command_name: str) -> bytes:
-        """Retrieve bytecode from cache or compile it"""
+    async def _get_bytecode(self, command_name: str):
+        """"Retrieve the bytecode and the interface (metadata) from the command"""
+        # Add an interface cache if it doesn't exist in the __init__
+        if not hasattr(self, 'interface_cache'): self.interface_cache = {}
+
         if command_name in self.bytecode_cache:
-            return self.bytecode_cache[command_name]
+            return self.bytecode_cache[command_name], self.interface_cache.get(command_name, [])
         
         async with self.db_pool.acquire() as conn:
-            row = await conn.fetchrow(
+            # 1. "Attempt to retrieve pre-compiled bytecode.
+            row_bc = await conn.fetchrow(
                 "SELECT bytecode FROM avap_bytecode WHERE command_name = $1",
                 command_name
             )
-            if row and row['bytecode']:
-                self.bytecode_cache[command_name] = row['bytecode']
-                return row['bytecode']
-        
-            row = await conn.fetchrow(
-                "SELECT code FROM obex_dapl_functions WHERE name = $1",
+            
+            # 2. Always obtain the original code and interface to map properties.
+            row_func = await conn.fetchrow(
+                "SELECT code, interface FROM obex_dapl_functions WHERE name = $1",
                 command_name
             )
-            if not row:
-                raise ValueError(f"Command not found: {command_name}")
             
-            python_code = row['code']
+            if not row_func:
+                raise ValueError(f"Command not found: {command_name}")
+
+            # "Process interface (the JSON that defines what is a 'param' and what is a 'variable')
+            try:
+                interface = json.loads(row_func['interface']) if row_func['interface'] else []
+            except:
+                interface = []
+            
+            self.interface_cache[command_name] = interface
+
+            if row_bc and row_bc['bytecode']:
+                self.bytecode_cache[command_name] = row_bc['bytecode']
+                return row_bc['bytecode'], interface
+            
+            # 3. If there is no bytecode, compile the row_func code.
+            python_code = row_func['code']
             compilation = self.compiler.compile(python_code, command_name)
             bytecode = compilation['bytecode']
             
@@ -407,73 +451,47 @@ class AVAPExecutor:
             """, command_name, bytecode, compilation['source_hash'])
             
             self.bytecode_cache[command_name] = bytecode
-            return bytecode
+            return bytecode, interface
     
-    async def _execute_command(self, cmd_name: str, bytecode: bytes, properties: List[Any], context: Dict[str, Any]):
-        """Universal mapper to fix KeyError like 'sourceVariable', 'varValue', etc."""
+    async def _execute_command(self, cmd_name: str, bytecode: bytes, properties: List[Any], context: Dict[str, Any], node_full: Dict[str, Any] = None, interface: List[Dict] = None):
         python_code = bytecode.decode('utf-8')
         
-        # 1. Base dictionary with positional keys
+        # 1. "We create a robust prop_dict with all possible aliases.
         prop_dict = {str(i): v for i, v in enumerate(properties)}
         
-        # 2. Universal Alias Mapping
-        if len(properties) >= 1:
-            first_arg = properties[0]
-            aliases = [
-                'targetVarName', 'varName', 'name', 
-                'sourceVariable', 'variableName', 'key' # Fixes 'sourceVariable'
-            ]
-            for alias in aliases:
-                prop_dict[alias] = first_arg
-            
-        if len(properties) >= 2:
-            second_arg = properties[1]
-            aliases = ['value', 'varValue', 'val', 'newValue', 'content']
-            for alias in aliases:
-                prop_dict[alias] = second_arg
 
-        class FakeConector:
-            def __init__(self, ctx):
-                self.variables = ctx['variables']
-                self.function_local_vars = ctx.get('function_local_vars', {})
-                self.results = ctx['results']
-                self.logger = self
-                self.req = ctx.get('req')  # <- aquí añadimos req
-            def info(self, msg):
-                print(f"[INFO] {msg}")
+        if interface:
+            for i, param_def in enumerate(interface):
+                if i < len(properties):
+                    prop_dict[param_def['item']] = properties[i]
 
-            def get_param(self, name):
-                """Recupera parámetros de query o body según el request"""
-                req = self.req
-                # 1. Buscar en query arguments
-                if req and hasattr(req, 'query_arguments'):
-                    if name.encode() in req.query_arguments:
-                        return req.query_arguments[name.encode()][0].decode()
-                # 2. Buscar en body como JSON
-                if req and hasattr(req, 'body'):
-                    try:
-                        body_data = json.loads(req.body)
-                        if name in body_data:
-                            return body_data[name]
-                    except:
-                        pass
-                # 3. Buscar en body_arguments (form data)
-                if req and hasattr(req, 'body_arguments'):
-                    if name.encode() in req.body_arguments:
-                        return req.body_arguments[name.encode()][0].decode()
-                return None
+        # 2. We define the bridge function to execute branches (if/loop)
+        def process_step_sync(step_node):
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(self._execute_ast(step_node, context))
+
+        builtins_dict = __builtins__ if isinstance(__builtins__, dict) else __builtins__.__dict__
         
         namespace = {
-            'task': {'properties': prop_dict, 'context': context.get("current_target")},
-            'self': type('obj', (object,), {'conector': FakeConector(context)}),
-            'tornado': tornado, # <--- Inyectamos tornado
-            'json': json,       # <--- Inyectamos json
-            '__builtins__': {**__builtins__, 'print': print} 
-                        if isinstance(__builtins__, dict) 
-                        else {**__builtins__.__dict__, 'print': print}
+            'task': {
+                'properties': prop_dict, 
+                'context': context.get("current_target"),
+                'branches': node_full.get('branches', {}) if node_full else {},
+                'sequence': node_full.get('sequence', []) if node_full else []
+            },
+            'self': type('obj', (object,), {
+                'conector': FakeConector(context),
+                'process_step': process_step_sync 
+            }),
+            'tornado': tornado, 
+            'json': json,
+            're': __import__('re'), 
+            'uuid': __import__('uuid'), 
+            'os': __import__('os'),
+            '__builtins__': {**builtins_dict, 'print': print}
         }
         
-        # Ahora addResult(numero) encontrará 'sourceVariable' en prop_dict
+        # 4. EXECUTION
         exec(python_code, namespace)
 
 # ========== HTTP HANDLERS ==========
@@ -504,7 +522,7 @@ class ExecuteHandler(tornado.web.RequestHandler):
 
 class HealthHandler(tornado.web.RequestHandler):
     async def get(self):
-        self.write({"status": "healthy", "service": "avap-server", "version": "1.0.28"})
+        self.write({"status": "healthy", "service": "avap-server", "version": "1.0.30"})
 
 class CompileHandler(tornado.web.RequestHandler):
     def initialize(self, executor):

@@ -1,0 +1,2 @@
+addVar(numero, "123.45")
+addResult(numero)
