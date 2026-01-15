@@ -2,7 +2,6 @@ import pytest
 import json
 import os
 import sys
-import asyncio
 from tornado.testing import AsyncHTTPTestCase, gen_test
 from tornado.web import Application
 
@@ -13,15 +12,12 @@ import asyncpg
 
 class TestAVAPFlow(AsyncHTTPTestCase):
     def get_app(self):
-        # We initialize executor as None and set it in setUp
-        self.executor = None
         return Application([
             (r"/api/v1/execute", ExecuteHandler, dict(executor=self)),
         ])
 
     def setUp(self):
         super().setUp()
-        # Initialize pool using the test's own loop
         self.db_url = os.getenv("DB_URL", "postgresql://postgres:password@localhost:5432/avap_db")
         self.pool = self.io_loop.run_sync(lambda: asyncpg.create_pool(self.db_url))
         self.executor_obj = AVAPExecutor(self.pool)
@@ -30,28 +26,93 @@ class TestAVAPFlow(AsyncHTTPTestCase):
         self.io_loop.run_sync(self.pool.close)
         super().tearDown()
 
-    # Proxy to act as the executor object inside the handler
     async def execute_script(self, script, variables, req=None):
         return await self.executor_obj.execute_script(script, variables, req=req)
 
     @gen_test
-    async def test_avap_full_flow(self):
+    async def test_1_simple_assignment_and_result(self):
+        """Prueba básica de addVar con tipos numéricos y addResult"""
         payload = {
             "script": "addVar(numero, 123.45)\naddResult(numero)",
             "variables": {}
         }
-        
-        response = await self.http_client.fetch(
-            self.get_url("/api/v1/execute"),
-            method="POST",
-            body=json.dumps(payload),
-            headers={"Content-Type": "application/json"},
-            raise_error=False # To see the actual error body if it fails
-        )
-        
-        assert response.code == 200, f"Failed with {response.code}: {response.body}"
+        response = await self.http_client.fetch(self.get_url("/api/v1/execute"), method="POST", body=json.dumps(payload), headers={"Content-Type": "application/json"})
+        data = json.loads(response.body)
+        assert data["variables"]["numero"] == 123.45
+        assert data["result"]["numero"] == 123.45
+
+    @gen_test
+    async def test_2_conditionals_if_else(self):
+        """Prueba de bloques if/else nativos"""
+        script = """
+        addVar(rol, "admin")
+        if(rol, "admin", =)
+            addVar(acceso, "concedido")
+        else()
+            addVar(acceso, "denegado")
+        end()
+        addResult(acceso)
+        """
+        payload = {"script": script, "variables": {}}
+        response = await self.http_client.fetch(self.get_url("/api/v1/execute"), method="POST", body=json.dumps(payload))
+        data = json.loads(response.body)
+        assert data["variables"]["acceso"] == "concedido"
+        assert data["result"]["acceso"] == "concedido"
+
+    @gen_test
+    async def test_3_loops_and_variable_resolution(self):
+        """Prueba de startLoop con límites basados en variables y concatenación"""
+        script = """
+        addVar(limite, 3)
+        startLoop(i, 1, limite)
+            ticket = "T-" + str(i)
+            addVar(ultimo_ticket, ticket)
+        endLoop()
+        addResult(ultimo_ticket)
+        """
+        payload = {"script": script, "variables": {}}
+        response = await self.http_client.fetch(self.get_url("/api/v1/execute"), method="POST", body=json.dumps(payload))
+        data = json.loads(response.body)
+        # El último i es 3, por lo que el ticket debe ser T-3
+        assert data["variables"]["ultimo_ticket"] == "T-3"
+
+    @gen_test
+    async def test_4_params_from_url(self):
+        """Prueba de addParam extrayendo datos de la query string"""
+        script = "addParam(user, usuario)\naddResult(usuario)"
+        # Pasamos el parámetro en la URL como lo hace el cliente real
+        url = self.get_url("/api/v1/execute?user=rafa_test")
+        payload = {"script": script, "variables": {}}
+        response = await self.http_client.fetch(url, method="POST", body=json.dumps(payload))
+        data = json.loads(response.body)
+        assert data["result"]["usuario"] == "rafa_test"
+
+    @gen_test
+    async def test_5_full_integration_complex(self):
+        """Prueba del flujo completo: Params -> Loop -> If -> Results"""
+        script = """
+        addParam(limit, max)
+        addVar(status, "procesando")
+        if(max, 0, >)
+            startLoop(idx, 1, max)
+                val = idx * 10
+                addVar(tmp, val)
+            endLoop()
+            addVar(final, "completado")
+        else()
+            addVar(final, "error")
+        end()
+        addResult(final)
+        addResult(tmp)
+        """
+        # Simulamos ?limit=4
+        url = self.get_url("/api/v1/execute?limit=4")
+        payload = {"script": script, "variables": {}}
+        response = await self.http_client.fetch(url, method="POST", body=json.dumps(payload))
         data = json.loads(response.body)
         
         assert data["success"] is True
-        assert data["variables"]["numero"] == 123.45
-        assert data["result"]["numero"] == 123.45
+        assert data["result"]["final"] == "completado"
+        # 4 iteraciones * 10 = 40
+        assert data["variables"]["tmp"] == 40
+        assert data["result"]["tmp"] == 40
