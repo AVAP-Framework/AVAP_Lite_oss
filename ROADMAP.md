@@ -21,15 +21,15 @@ The server transforms raw script into results through a high-performance pipelin
 ## Development Journey
 
 ### Phase I: Foundation (The MVP)
-- [ ] **Server Core**: Tornado async HTTP server with health endpoints.
-- [ ] **Persistence**: PostgreSQL integration (`obex_dapl_functions`) and connection pooling.
-- [ ] **Base Parser**: Syntax validation and command recognition.
-- [ ] **Lifecycle**: Orderly initialization and graceful shutdown logic.
+- [x] ~~**Server Core**: Tornado async HTTP server with health endpoints.~~
+- [x] ~~**Persistence**: PostgreSQL integration (`obex_dapl_functions`) and connection pooling.~~
+- [x] ~~**Base Parser**: Syntax validation and command recognition.~~
+- [x] ~~**Lifecycle**: Orderly initialization and graceful shutdown logic.~~
 
 ### Phase II: Bytecode & JIT Compilation
-- [ ] **Bytecode Spec**: Custom binary format with version headers and digital signatures.
-- [ ] **Compiler**: Python AST transformation into intermediate representation (IR).
-- [ ] **Bytecode Storage**: Implementation of the `avap_bytecode` table with hash-based versioning.
+- [x] ~~**Bytecode Spec**: Custom binary format with version headers and digital signatures.~~
+- [x] ~~**Compiler**: Python AST transformation into intermediate representation (IR).~~
+- [x] ~~**Bytecode Storage**: Implementation of the `avap_bytecode` table with hash-based versioning.~~
 - [ ] **Optimization**: Initial pipeline for bytecode performance tuning.
 
 ### Phase III: Advanced Rust VM & Sandboxing
@@ -42,9 +42,11 @@ The server transforms raw script into results through a high-performance pipelin
 - [ ] **Thread Management**: Offloading VM tasks to Rust threads to bypass Python's GIL.
 
 ### Phase IV: Performance & Caching
-- [ ] **Layered Caching**: 
-    - L1: Memory (LRU) | L2: Redis (Distributed) | L3: PostgreSQL (Persistent).
-- [ ] **Async Request Handling**: Rate limiting (IP/API Key) and request queuing for overload protection.
+- [x] **Layered Caching**: 
+    - L1: Memory (LRU) 
+    - L2: Redis (Distributed) 
+    - ~~L3: PostgreSQL (Persistent).~~
+- [x] ~~**Async Request Handling**: Rate limiting (IP/API Key) and request queuing for overload protection.~~
 - [ ] **Response Optimization**: Response compression (gzip) and keep-alive management.
 
 ### Phase V: Persistence & Distributed Systems
@@ -61,7 +63,7 @@ The server transforms raw script into results through a high-performance pipelin
 ### Phase VII: Security & Hardening
 - [ ] **API Hardening**: Request signing, HSTS, and CSP headers.
 - [ ] **Server Hardening**: Non-root container execution and network interface binding.
-- [ ] **Audit & Compliance**: Full audit trail of script executions and admin operations.
+- [x] ~~**Audit & Compliance**: Full audit trail of script executions and admin operations.~~
 - [ ] **DDoS Protection**: Basic mitigation and request sanitization.
 
 ### Phase VIII: Scalability & High Availability (HA)
