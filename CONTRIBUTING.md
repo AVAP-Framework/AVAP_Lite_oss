@@ -32,12 +32,68 @@ maturin develop
 
 ```
 
+3. **Infrastructure with Docker**:
+Para trabajar con el entorno contenedorizado, primero debes construir las imágenes y luego levantar los servicios:
+```Bash
+
+docker-compose build
+docker-compose up
+
+```
+
 
 3. **Running Tests**:
 * Python tests: `pytest`
 * Rust core tests: `cargo test`
 
 
+
+---
+
+## Testing & Verification (CURL Examples)
+Una vez que el servicio esté corriendo (vía Docker o local), puedes probar el motor de ejecución con las siguientes consultas en tu terminal:
+
+###Basic Parameter Mapping
+```bash
+curl -X POST "http://localhost:8888/api/v1/execute?name=Rafa" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "script": "addParam(name,nombre)\naddResult(nombre)",
+           "variables": {}
+         }'
+```
+###Functions and String Formatting
+```bash
+
+curl -X POST "http://localhost:8888/api/v1/execute?name=Rafa" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "script": "function saludo(mensaje) {\n    final_message = \"El hash es %s\" % mensaje\n    return final_message\n}\n\nmens = saludo(\"Rafa\")\naddResult(mens);",
+           "variables": {}
+         }'
+```
+
+###Conditionals & Logic
+```bash
+
+curl -X POST "http://localhost:8888/api/v1/execute?user=Rafa" \
+-H "Content-Type: application/json" \
+-d '{
+  "script": "addParam(user, usuario)\nif(usuario, \"Rafa\", =)\n  addVar(mensaje, \"Bienvenido Admin\")\nelse()\n  addVar(mensaje, \"Acceso como Invitado\")\nend()\naddResult(mensaje)",
+  "variables": {}
+}'
+```
+
+###Loops and Iterations
+```Bash
+
+curl -X POST http://localhost:8888/api/v1/execute \
+-H "Content-Type: application/json" \
+-d '{
+  "script": "addVar(inicio, 1)\naddVar(fin, 3)\nstartLoop(i, inicio, fin)\n  addResult(i)\nendLoop()",
+  "variables": {}
+}'
+```
 
 ---
 
