@@ -8,6 +8,7 @@ import json
 import hashlib
 from datetime import datetime
 from typing import Dict, Any, List
+import requests
 
 import nest_asyncio
 nest_asyncio.apply() 
@@ -30,6 +31,9 @@ class FakeConector:
         self.results = ctx['results']
         self.logger = self
         self.req = ctx.get('req')
+        self.try_level = 0
+        self.except_level = []
+
     def info(self, msg):
         print(f"[INFO] {msg}")
 
@@ -435,6 +439,7 @@ class AVAPExecutor:
             if node_type == "return": 
                 return await self._execute_ast({'type': 'return', 'properties': properties}, context)
 
+            
             bytecode, interface = await self._get_bytecode(node_type)
             
             resolved_props = []
@@ -455,6 +460,7 @@ class AVAPExecutor:
             context["current_target"] = target
             await self._execute_command(node_type, bytecode, resolved_props, context, node_full=node, interface=interface)
 
+            
             context['variables'].update(self.conector.variables)
             context['results'].update(self.conector.results)
             
@@ -474,7 +480,8 @@ class AVAPExecutor:
             'variables': variables, #.copy(),
             'results': {},
             'logs': [],
-            'req': req
+            'req': req,
+            #'last_error': None
         }
         
         self.conector = FakeConector(context)
@@ -489,13 +496,30 @@ class AVAPExecutor:
                     'success': True
                 })
             except Exception as e:
+                error_msg = str(e)
+                
+                # SI NO HAY UN TRY ACTIVO (nivel 0), LANZAMOS EL ERROR
+                if self.conector.try_level <= 0:
+                    context['logs'].append({
+                        'command': node.get('type'),
+                        'duration_ms': (datetime.now() - cmd_start).total_seconds() * 1000,
+                        'success': False,
+                        'error': error_msg
+                    })
+                    raise e # Esto detiene la ejecución y devuelve el 400
+                
+                # SI ESTAMOS EN UN TRY (nivel > 0), CAPTURAMOS Y SEGUIMOS
+                # Guardamos el error en una variable especial para que 'exception' la lea
+                self.conector.variables['__last_error__'] = error_msg
+                
                 context['logs'].append({
                     'command': node.get('type'),
                     'duration_ms': (datetime.now() - cmd_start).total_seconds() * 1000,
                     'success': False,
-                    'error': str(e)
+                    'error': error_msg
                 })
-                raise
+                continue
+            
         return context
     
     async def _get_bytecode(self, command_name: str):
@@ -606,6 +630,23 @@ class ExecuteHandler(tornado.web.RequestHandler):
             
             result = await self.executor.execute_script(script, variables, req=self)
             
+            http_status = 200
+
+            if "_status" in result['variables']:
+                raw_status = result['variables']['_status']
+                try:
+                    val = int(raw_status)
+                    # Validate status code
+                    if 100 <= val <= 599:
+                        http_status = val
+                    else:
+                        print(f"[WARNING] Invalid _status code received: {val}")
+                except (ValueError, TypeError):
+                    print(f"[WARNING] _status variable is not a number: {raw_status}")
+
+            # set real request status
+            self.set_status(http_status)
+
             self.write({
                 "success": True,
                 "result": result['results'],

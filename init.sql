@@ -174,6 +174,173 @@ $body$
 import os
 if os.getenv("DEBUG") == "True":
     print("[AVAP] endLoop marker reached")
-$body$);
+$body$),
 
+(
+    'RequestGet', 
+    '[{"item":"url","type":"variable"},{"item":"querystring","type":"variable"},{"item":"headers","type":"variable"},{"item":"o_result","type":"variable"}]',
+    $body$
+import requests
+import json
+
+def resolve(val):
+    if isinstance(val, str) and val in self.conector.variables:
+        return self.conector.variables[val]
+    return val
+
+def ensure_dict(val):
+    if isinstance(val, dict): return val
+    if not val: return {}
+    if isinstance(val, str):
+        try: return json.loads(val.replace("'", '"'))
+        except: pass
+    return {}
+
+# 1. Obtener inputs
+raw_url = resolve(task["properties"].get("url"))
+raw_qs  = resolve(task["properties"].get("querystring"))
+raw_head = resolve(task["properties"].get("headers"))
+# Soporte para asignación: res = RequestGet(...)
+target_var = task.get("context") or task["properties"].get("o_result")
+
+url = str(raw_url).strip()
+params = ensure_dict(raw_qs)
+headers = ensure_dict(raw_head)
+
+# 2. Ejecución (Sin el try/except interno que se come el error)
+response = requests.get(url, params=params, headers=headers, timeout=30)
+
+# CLAVE: Si el código es 4xx o 5xx, lanza una excepción que captura el Executor
+response.raise_for_status() 
+
+try:
+    result_data = response.json()
+except:
+    result_data = response.text
+
+# 3. Guardar resultado
+if target_var:
+    self.conector.variables[target_var] = result_data
+$body$
+),
+
+(
+    'RequestPost', 
+    '[
+        {"item":"url","type":"variable"},
+        {"item":"querystring","type":"variable"},
+        {"item":"headers","type":"variable"},
+        {"item":"body","type":"variable"},
+        {"item":"o_result","type":"variable"}
+    ]',
+    $body$
+import requests
+import json
+
+# --- 1. HELPERS (Consistentes con RequestGet) ---
+def resolve(val):
+    if isinstance(val, str) and val in self.conector.variables:
+        return self.conector.variables[val]
+    return val
+
+def ensure_dict(val):
+    if isinstance(val, dict): return val
+    if not val: return {}
+    if isinstance(val, str):
+        try:
+            return json.loads(val.replace("'", '"'))
+        except:
+            pass
+    return {}
+
+# --- 2. INPUTS ---
+raw_url = resolve(task["properties"].get("url"))
+raw_qs  = resolve(task["properties"].get("querystring"))
+raw_head = resolve(task["properties"].get("headers"))
+raw_body = resolve(task["properties"].get("body"))
+
+# Lógica de destino (Asignación vs Parámetro)
+target_var = task.get("context")
+if not target_var:
+    target_var = task["properties"].get("o_result")
+
+url = str(raw_url).strip()
+params = ensure_dict(raw_qs)
+headers = ensure_dict(raw_head)
+
+# --- 3. PROCESAMIENTO INTELIGENTE DEL BODY ---
+# Intentamos detectar si el body es JSON o un Diccionario
+body_data = raw_body
+is_json = False
+
+if isinstance(raw_body, dict):
+    is_json = True
+elif isinstance(raw_body, str):
+    try:
+        # Intentamos parsear para ver si es estructura JSON
+        body_data = json.loads(raw_body.replace("'", '"'))
+        is_json = True
+    except:
+        # Si falla, es string plano/raw data
+        is_json = False
+
+# --- 4. EJECUCIÓN ---
+result_data = None
+try:
+    if is_json:
+        # requests.post con 'json=' añade auto Content-Type: application/json
+        response = requests.post(url, params=params, json=body_data, headers=headers, timeout=30)
+    else:
+        # Se envía como x-www-form-urlencoded o raw string
+        response = requests.post(url, params=params, data=body_data, headers=headers, timeout=30)
+    
+    try:
+        result_data = response.json()
+    except:
+        result_data = response.text
+except Exception as e:
+    result_data = {"error": str(e)}
+
+# --- 5. GUARDADO ---
+if target_var:
+    self.conector.variables[target_var] = result_data
+$body$
+),
+
+(
+    'try', 
+    '[]',
+    $body$
+# Incrementamos el nivel de protección
+self.conector.try_level += 1
+print(f"[AVAP] Bloque TRY iniciado. Nivel actual: {self.conector.try_level}")
+$body$
+),
+
+(
+    'exception', 
+    '[{"item":"error","type":"var"}]',
+    $body$
+# 1. Obtener el error guardado por el executor
+error_msg = self.conector.variables.get('__last_error__', 'No error detected')
+
+# 2. Caso: var = exception(...) -> target es la variable de la izquierda
+target = task.get("context")
+if target:
+    self.conector.variables[target] = error_msg
+
+# 3. Caso: exception(mi_var) -> properties['error'] es el nombre de la variable
+# Nota: tu parser guarda los argumentos en task['properties'] (lista o dict)
+props = task.get("properties", {})
+# Intentamos obtener el nombre de la variable del primer argumento
+param_var_name = props.get("error") or props.get("0") or (props[0] if isinstance(props, list) and props else None)
+
+if param_var_name and isinstance(param_var_name, str):
+    self.conector.variables[param_var_name] = error_msg
+
+# 4. Limpieza de seguridad
+self.conector.try_level -= 1
+# self.conector.variables['__last_error__'] = None 
+$body$
+);
 

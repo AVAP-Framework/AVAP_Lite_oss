@@ -116,3 +116,82 @@ class TestAVAPFlow(AsyncHTTPTestCase):
         # 4 iteraciones * 10 = 40
         assert data["variables"]["tmp"] == 40
         assert data["result"]["tmp"] == 40
+
+    @gen_test
+    async def test_6_request_get_variants(self):
+        """Prueba de RequestGet con asignación directa, addVar y filtros"""
+        # Test de RequestGet simple con variable destino
+        script1 = "RequestGet('https://jsonplaceholder.typicode.com/todos/1', '', '', 'mi_api_data')\naddResult(mi_api_data)"
+        response1 = await self.http_client.fetch(self.get_url("/api/v1/execute"), method="POST", body=json.dumps({"script": script1, "variables": {}}))
+        data1 = json.loads(response1.body)
+        assert data1["success"] is True
+        assert "userId" in data1["result"]["mi_api_data"]
+
+        # Test de RequestGet con variables mixtas (addVar + Asignación Python)
+        script2 = """
+        url_objetivo = "https://jsonplaceholder.typicode.com/comments"
+        addVar(mis_filtros, "{'postId': 1}")
+        RequestGet(url_objetivo, mis_filtros, '', 'datos_recibidos')
+        addResult(datos_recibidos)
+        """
+        response2 = await self.http_client.fetch(self.get_url("/api/v1/execute"), method="POST", body=json.dumps({"script": script2, "variables": {}}))
+        data2 = json.loads(response2.body)
+        assert len(data2["result"]["datos_recibidos"]) > 0
+
+    @gen_test
+    async def test_7_custom_http_status(self):
+        """Prueba de la variable especial _status para forzar códigos HTTP (404)"""
+        script = """
+        url = "https://jsonplaceholder.typicode.com/todos/999999"
+        res = RequestGet(url, "", "")
+        _status = 404
+        addResult(res)
+        """
+        # Esperamos un 404, por lo que usamos raise_error=False para que no explote el cliente de test
+        response = await self.http_client.fetch(self.get_url("/api/v1/execute"), method="POST", body=json.dumps({"script": script, "variables": {}}), raise_error=False)
+        assert response.code == 404
+        data = json.loads(response.body)
+        assert data["variables"]["_status"] == 404
+
+    @gen_test
+    async def test_8_try_catch_command_not_found(self):
+        """Prueba de try() y exception() ante un comando que no existe"""
+        script = """
+        try()
+            comandoInexistente()
+        detalle_error = exception(msg)
+        addResult(detalle_error)
+        addResult(msg)
+        """
+        payload = {"script": script, "variables": {"msg": "esperando..."}}
+        response = await self.http_client.fetch(self.get_url("/api/v1/execute"), method="POST", body=json.dumps(payload))
+        data = json.loads(response.body)
+        assert data["success"] is True
+        assert "not found" in data["result"]["detalle_error"].lower()
+        assert data["result"]["msg"] == data["result"]["detalle_error"]
+
+    @gen_test
+    async def test_9_try_catch_with_500_status(self):
+        """Prueba de flujo completo: Error de Red -> Exception -> _status = 500"""
+        script = """
+        try()
+            res = RequestGet("https://jsonplaceholder.typicode.com/posts/invalid/error500", {}, {})
+        motivo = exception(msg)
+        if(motivo, "No error detected", "!=")
+            _status = 500
+            mensaje_salida = "Error critico detectado"
+            addResult(mensaje_salida)
+            addResult(motivo)
+        end()
+        """
+        payload = {
+            "variables": {"url_erronea": "https://jsonplaceholder.typicode.com/posts/invalid/error500"},
+            "script": script
+        }
+        response = await self.http_client.fetch(self.get_url("/api/v1/execute"), method="POST", body=json.dumps(payload), raise_error=False)
+        
+        # Verificamos que el código HTTP sea 500
+        assert response.code == 500
+        data = json.loads(response.body)
+        assert data["result"]["mensaje_salida"] == "Error critico detectado"
+        assert "404" in data["result"]["motivo"]  # JSONPlaceholder devuelve 404 en esa URL
