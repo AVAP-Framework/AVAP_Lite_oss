@@ -246,7 +246,7 @@ class AVAPParser:
     def _clean_value(self, value: str) -> Any:
         value = value.strip()
         
-        # "If it has quotes, it is a string literal; we strip the quotes and return the value.
+        # If it has quotes, it is a string literal; we strip the quotes and return the value.
         if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
             return value[1:-1]
         
@@ -314,14 +314,13 @@ class AVAPExecutor:
         if p in full_scope:
             return full_scope[p]
 
-        # 2. "Is it a complex expression (Mathematics or Concatenation)?
-        # "If it contains operators or quotes, we force Python evaluation.
+        # 2. Is it a complex expression (Mathematics or Concatenation)?
+        # If it contains operators or quotes, we force Python evaluation.
         if any(op in p for op in ['+', '-', '*', '/', '%']) or '"' in p or "'" in p:
             full_scope = {**context['variables'], **(self.function_local_vars or {})}
             try:
                 safe_builtins = {"str": str, "int": int, "float": float, "len": len}
                 return eval(p, {"__builtins__": safe_builtins}, full_scope)
-                #return eval(p, {"__builtins__": {}}, full_scope)
             except:
                 pass
 
@@ -335,36 +334,19 @@ class AVAPExecutor:
         target = node.get("context")
 
         if node_type == 'if':
-            # Delegamos al sistema de comandos de la DB para usar la lógica de smart_cast
+            # Delegate to the DB command system to use smart_cast logic
             bytecode, interface = await self._get_bytecode('if')
             
-            # Preparamos las propiedades para el comando
+            # Prepare properties for the command
             resolved_props = []
             for p in properties:
                 resolved_props.append(p)
 
             await self._execute_command('if', bytecode, resolved_props, context, node_full=node, interface=interface)
             
-            # Actualizamos contexto
+            # update the context
             context['variables'].update(self.conector.variables)
             context['results'].update(self.conector.results)
-            return
-
-        if node_type == 'if' and False:
-            var_name = properties[0]
-            expected = properties[1]
-            comp = properties[2] if len(properties) > 2 else "="
-            
-            actual = context['variables'].get(var_name)
-            
-            # Evaluación de condición
-            condition_met = False
-            if comp == "=": condition_met = (str(actual) == str(expected))
-            elif comp == "!=": condition_met = (str(actual) != str(expected))
-            
-            branch = "true" if condition_met else "false"
-            for child in node.get('branches', {}).get(branch, []):
-                await self._execute_ast(child, context)
             return
 
         if node_type == 'startLoop':
@@ -372,7 +354,6 @@ class AVAPExecutor:
             raw_start = await self._resolve_arg(properties[1], context)
             raw_end = await self._resolve_arg(properties[2], context)
             
-            # Ahora raw_end será 5, no "maximo"
             start = int(raw_start)
             end = int(raw_end)
             
@@ -544,7 +525,7 @@ class AVAPExecutor:
             except Exception as e:
                 error_msg = str(e)
                 
-                # SI NO HAY UN TRY ACTIVO (nivel 0), LANZAMOS EL ERROR
+                # IF NOT AN ACTIVE TRY (level 0), RAISE ERROR
                 if self.conector.try_level <= 0:
                     context['logs'].append({
                         'command': node.get('type'),
@@ -552,10 +533,10 @@ class AVAPExecutor:
                         'success': False,
                         'error': error_msg
                     })
-                    raise e # Esto detiene la ejecución y devuelve el 400
+                    raise e # this stops execution and returns 400
                 
-                # SI ESTAMOS EN UN TRY (nivel > 0), CAPTURAMOS Y SEGUIMOS
-                # Guardamos el error en una variable especial para que 'exception' la lea
+                # ACTIVE TRY (level > 0), CATCH AND CONTINUE
+                # Save the error in an special variable to 'exception' be able to read it
                 self.conector.variables['__last_error__'] = error_msg
                 
                 context['logs'].append({
@@ -629,7 +610,7 @@ class AVAPExecutor:
             print(f"[SECURITY ALERT] Bytecode processing error for {cmd_name}: {e}")
             raise RuntimeError(f"Integrity failure in command: {cmd_name}")
         
-        # 1. "We create a robust prop_dict with all possible aliases.
+        # 1. We create a robust prop_dict with all possible aliases.
         prop_dict = {str(i): v for i, v in enumerate(properties)}
         
 

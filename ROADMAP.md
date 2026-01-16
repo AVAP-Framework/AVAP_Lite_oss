@@ -30,10 +30,10 @@ The server transforms raw script into results through a high-performance pipelin
 - [x] ~~**Bytecode Spec**: Custom binary format with version headers and digital signatures.~~
 - [x] ~~**Compiler**: Python AST transformation into intermediate representation (IR).~~
 - [x] ~~**Bytecode Storage**: Implementation of the `avap_bytecode` table with hash-based versioning.~~
-- [ ] **Optimization**: Initial pipeline for bytecode performance tuning.
+- [x] ~~**Optimization**: Initial pipeline for bytecode performance tuning.~~
 
 ### Phase III: Advanced Rust VM & Sandboxing
-- [ ] **VM Core**: Complete instruction set (Scopes: Global, Local, Function).
+- [x] ~~**VM Core**: Complete instruction set (Scopes: Global, Local, Function).~~
 - [ ] **Memory Isolation**: Dedicated stack management per execution context.
 - [ ] **Security Sandbox**: 
     - [ ] CPU instruction/cycle quotas.
