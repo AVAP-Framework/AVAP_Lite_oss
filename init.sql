@@ -54,8 +54,8 @@ $body$
 ('addResult', '[{"item":"sourceVariable","type":"variable"}]',
 $body$
 source = task["properties"]["sourceVariable"]
-# Busca el valor, si no existe usa el nombre como literal
-value = self.conector.variables.get(source, source)
+# Si la variable no existe en el conector, devolvemos None (null en JSON)
+value = self.conector.variables.get(source, None)
 self.conector.results[source] = value
 $body$),
 
@@ -89,68 +89,33 @@ self.conector.logger.info(f"[AVAP PARSER] ADDING VARIABLE {variable_name} FROM P
 
 ('if', '[{"item":"variable","type":"variable"},{"item":"variableValue","type":"variable"},{"item":"comparator","type":"value"}]',
 $body$
-import os, uuid, re, json
-try:
-    __DEBUG = os.getenv("DEBUG", "True") == "True"
-except:
-    __DEBUG = True
+def try_num(v):
+    s = str(v).strip().strip('"').strip("'")
+    try:
+        return float(s) if "." in s else int(s)
+    except:
+        return s
 
-error = False  
-try:
-    variable = task["properties"].get("variable")
-    variableValue = task["properties"].get("variableValue")
-    comparator = task["properties"].get("comparator")
-    if isinstance(variableValue, str) and variableValue in self.conector.variables:
-        variableValue = self.conector.variables[variableValue]
-    variableCheckValue = self.conector.variables.get(variable, None)
-except Exception as e:
-    error = True
+v1 = try_num(self.conector.variables.get(task["properties"]["variable"], task["properties"]["variable"]))
+v2 = try_num(task["properties"]["variableValue"])
+op = str(task["properties"]["comparator"]).strip().strip('"').strip("'")
 
-if not error:
-    election = "false"
-    if comparator == "=":
-        election = "true" if str(variableCheckValue) == str(variableValue) else "false"
-    elif comparator == "<":
-        election = "true" if variableCheckValue < variableValue else "false"
-    elif comparator == ">":
-        election = "true" if variableCheckValue > variableValue else "false"
-    elif comparator == "!=":
-        election = "true" if str(variableCheckValue) != str(variableValue) else "false"
-    else:
-        comp_str = comparator.replace("¨", "\"").replace("`", "")
-        if comp_str.startswith(("\'", "\"")) and comp_str.endswith(("\'", "\"")):
-            comp_str = comp_str[1:-1]
-        variable_stack = sorted(self.conector.variables.keys(), key=len, reverse=True)
-        temp_map = {v: uuid.uuid4().hex for v in variable_stack}
-        for v in variable_stack:
-            comp_str = re.sub(r"(?<![\"\'])\b%s\b(?![\"\'])" % re.escape(v), temp_map[v], comp_str)
-        for v in variable_stack:
-            replacement = f"self.conector.variables[\"{v}\"]"
-            comp_str = re.sub(r"\b%s\b" % temp_map[v], replacement, comp_str)
-        try:
-            if eval(comp_str, {"self": self, "json": json}):
-                election = "true"
-            else:
-                election = "false"
-        except:
-            election = "false"
+res = False
+if op in ["=", "=="]: res = (str(v1) == str(v2))
+elif op == ">": res = (v1 > v2)
+elif op == "<": res = (v1 < v2)
+elif op == ">=": res = (v1 >= v2)
+elif op == "<=": res = (v1 <= v2)
+elif op == "!=": res = (str(v1) != str(v2))
 
-    if election in task["branches"]:
-        for step in task["branches"][election]:
-            if not self.process_step(step):
-                break
-$body$),
+branch = "true" if res else "false"
+if branch in task["branches"]:
+    for step in task["branches"][branch]:
+        self.process_step(step)
 
-('else', '[]', $body$
-import os
-if os.getenv("DEBUG") == "True":
-    print("[AVAP] Else marker")
-$body$),
-
-('end', '[]', $body$
-import os
-if os.getenv("DEBUG") == "True":
-    print("[AVAP] End marker")
+# IMPORTANTE: Sincronizar de vuelta al finalizar la rama
+# Esto asegura que 'final' y otras variables lleguen al Executor principal
+self.conector.variables.update(self.conector.variables)
 $body$),
 
 ('end', '[]', 
@@ -171,43 +136,35 @@ if os.getenv("DEBUG") == "True":
 
 ('startLoop', '[{"item":"varName","type":"variable"},{"item":"from","type":"value"},{"item":"to","type":"value"}]',
 $body$
-# Obtener propiedades del nodo
 sequence = task.get("sequence", [])
 varName = task["properties"].get("varName")
 LoopFrom = task["properties"].get("from")
 Loopto = task["properties"].get("to")
 
-self.conector.logger.info(f"[AVAP PARSER] ENTERING IN A LOOP SEQUENCE WITH PARAMETERS {varName} {LoopFrom} {Loopto}")
+def resolve_robust(v):
+    # Buscar en variables o usar el literal
+    val = self.conector.variables.get(v, v)
+    # Limpiar y convertir
+    s = str(val).strip().strip('"').strip("'")
+    try:
+        return int(float(s)) # Maneja "4", "4.0" y " 4 "
+    except:
+        return 0
 
-# Inicializar la variable del iterador
-try:
-    # Si LoopFrom es una variable, obtener su valor, si no, convertir a int
-    start_val = int(self.conector.variables.get(LoopFrom, LoopFrom))
-except:
-    start_val = 0
+start_val = resolve_robust(LoopFrom)
+end_val = resolve_robust(Loopto)
 
 self.conector.variables[varName] = start_val
 
-# Determinar el límite (watcher)
-watcher = None
-try:
-    if str(Loopto).isnumeric():
-        watcher = int(Loopto)
-    else:
-        watcher = int(self.conector.variables.get(Loopto, Loopto))
-except Exception as e:
-    self.conector.logger.info(f"ERROR DETERMINING LOOP LIMIT: {e}")
-    watcher = 0
-
-# Ejecución del Bucle
-while int(self.conector.variables[varName]) <= watcher:
+# Ejecución del bucle
+while self.conector.variables[varName] <= end_val:
     for stp in sequence:
         if not self.process_step(stp):
-            self.conector.logger.info("FAILED PROCESSING STEP INSIDE LOOP")
             break
-            
-    # Incrementar el iterador
-    self.conector.variables[varName] = int(self.conector.variables[varName]) + 1
+    self.conector.variables[varName] += 1
+
+# Sincronizar contexto al salir
+self.conector.variables.update(self.conector.variables)
 $body$),
 
 ('endLoop', '[]',

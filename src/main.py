@@ -285,6 +285,22 @@ class AVAPExecutor:
         target = node.get("context")
 
         if node_type == 'if':
+            # Delegamos al sistema de comandos de la DB para usar la lógica de smart_cast
+            bytecode, interface = await self._get_bytecode('if')
+            
+            # Preparamos las propiedades para el comando
+            resolved_props = []
+            for p in properties:
+                resolved_props.append(p)
+
+            await self._execute_command('if', bytecode, resolved_props, context, node_full=node, interface=interface)
+            
+            # Actualizamos contexto
+            context['variables'].update(self.conector.variables)
+            context['results'].update(self.conector.results)
+            return
+
+        if node_type == 'if' and False:
             var_name = properties[0]
             expected = properties[1]
             comp = properties[2] if len(properties) > 2 else "="
@@ -602,7 +618,7 @@ class ExecuteHandler(tornado.web.RequestHandler):
 
 class HealthHandler(tornado.web.RequestHandler):
     async def get(self):
-        self.write({"status": "healthy", "service": "avap-server", "version": "1.0.32"})
+        self.write({"status": "healthy", "service": "avap-server", "version": "1.0.33"})
 
 class CompileHandler(tornado.web.RequestHandler):
     def initialize(self, executor):
