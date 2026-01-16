@@ -32,8 +32,17 @@ maturin develop
 
 ```
 
+3. **Infrastructure with Docker**:
+To work with the containerized environment, you must first build the images and then start the services:
 
-3. **Running Tests**:
+```bash
+
+docker-compose build
+docker-compose up
+
+```
+
+4. **Running Tests**:
 * Python tests: `pytest`
 * Rust core tests: `cargo test`
 
@@ -80,6 +89,67 @@ The project utilizes a dual communication structure to balance agility with rigo
 2. **Transparency.** We strongly encourage the use of public channels over DMs to foster knowledge transfer.
 
 ---
+
+---
+
+## Testing & Verification (CURL Examples)
+Once the service is running (via Docker or locally), you can test the execution engine by running the following queries in your terminal:
+
+#### Basic Parameter Mapping
+```bash
+curl -X POST "http://localhost:8888/api/v1/execute?name=Rafa" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "script": "addParam(name,nombre)\naddResult(nombre)",
+           "variables": {}
+         }'
+```
+#### Functions and String Formatting
+```bash
+
+curl -X POST "http://localhost:8888/api/v1/execute?name=Rafa" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "script": "function saludo(mensaje) {\n    final_message = \"El hash es %s\" % mensaje\n    return final_message\n}\n\nmens = saludo(\"Rafa\")\naddResult(mens);",
+           "variables": {}
+         }'
+```
+
+#### Conditionals & Logic
+```bash
+
+curl -X POST "http://localhost:8888/api/v1/execute?user=Rafa" \
+-H "Content-Type: application/json" \
+-d '{
+  "script": "addParam(user, usuario)\nif(usuario, \"Rafa\", =)\n  addVar(mensaje, \"Bienvenido Admin\")\nelse()\n  addVar(mensaje, \"Acceso como Invitado\")\nend()\naddResult(mensaje)",
+  "variables": {}
+}'
+```
+
+#### Loops and Iterations
+```Bash
+
+curl -X POST http://localhost:8888/api/v1/execute \
+-H "Content-Type: application/json" \
+-d '{
+  "script": "addVar(inicio, 1)\naddVar(fin, 3)\nstartLoop(i, inicio, fin)\n  addResult(i)\nendLoop()",
+  "variables": {}
+}'
+```
+
+#### Complex Expressions and Math
+```bash
+
+curl -X POST "http://localhost:8888/api/v1/execute" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "script": "function calcular(n) {\n    return n * 2\n}\n\nres_math = calcular(10 + 5)\nnombre = \"Rafa\"\nmensaje = \"Hola \" + nombre\n\naddResult(res_math)\naddResult(mensaje)",
+           "variables": {}
+         }'
+```
+---
+
+
 
 ## Pull Request Process
 
