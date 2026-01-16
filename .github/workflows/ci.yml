@@ -52,7 +52,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential postgresql-client
           python -m pip install --upgrade pip
-          pip install maturin ruff pytest pytest-asyncio tornado asyncpg redis nest_asyncio
+          pip install maturin ruff pytest pytest-asyncio tornado asyncpg redis nest_asyncio requests
 
       - name: Initialize Test Database
         env:
