@@ -1,6 +1,15 @@
+# Web Server
 tornado==6.3.3
+
+# Database & Persistence
 asyncpg==0.29.0
 psycopg2-binary>=2.9
+
+# Utilities
 pyyaml>=6.0
 nest-asyncio==1.5.8
 requests>=2.31.0
+
+# Security & Data Structure (Built-in modules like hmac, hashlib, and struct do not need entries)
+# Added for future-proofing Phase III/IV if you use advanced crypto or caching
+python-dotenv>=1.0.0

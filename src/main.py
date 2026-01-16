@@ -19,10 +19,55 @@ from tornado.options import define, options
 
 import asyncpg
 
+import struct
+import hmac
+import hashlib
+
 define("port", default=8888, help="Server Port")
 define("db_url", default="postgresql://postgres:password@postgres/avap_db", 
        help="PostgreSQL URL")
 
+class BytecodePacker:
+    # Header constants
+    MAGIC = b'AVAP'  # File identification magic number
+    VERSION = 1      # Protocol version
+    SECRET_KEY = b'avap_secure_signature_key_2026' # HMAC signing key (use Env Var in prod)
+
+    @classmethod
+    def pack(cls, python_code: str) -> bytes:
+        """Encapsulates Python code into a signed binary package."""
+        payload = python_code.encode('utf-8')
+        # Header: Magic(4b) + Version(2b) + PayloadSize(4b) = 10 bytes
+        header = struct.pack('>4sHI', cls.MAGIC, cls.VERSION, len(payload))
+        
+        # Digital Signature: HMAC-SHA256 for integrity and authenticity
+        signature = hmac.new(cls.SECRET_KEY, header + payload, hashlib.sha256).digest()
+        
+        # Structure: [Header][Signature][Payload]
+        return header + signature + payload
+
+    @classmethod
+    def unpack(cls, data: bytes) -> str:
+        """Validates signature and extracts code from binary package."""
+        # 1. Minimum size validation (Header 10b + Signature 32b)
+        if len(data) < 42:
+            raise ValueError("Corrupted bytecode: Insufficient size")
+
+        # 2. Extract and validate Header
+        magic, version, p_size = struct.unpack('>4sHI', data[:10])
+        if magic != cls.MAGIC:
+            raise ValueError("Invalid bytecode: Magic Number mismatch")
+        
+        # 3. Extract Signature and Payload
+        stored_signature = data[10:42]
+        payload = data[42:]
+
+        # 4. Validate Digital Signature
+        expected_signature = hmac.new(cls.SECRET_KEY, data[:10] + payload, hashlib.sha256).digest()
+        if not hmac.compare_digest(stored_signature, expected_signature):
+            raise ValueError("SECURITY ALERT! Bytecode has been tampered with or signature is invalid")
+
+        return payload.decode('utf-8')
 
 class FakeConector:
     def __init__(self, ctx):
@@ -65,8 +110,9 @@ class AVAPCompiler:
     
     def compile(self, python_code: str, command_name: str) -> Dict[str, Any]:
         """Compile Python code to 'bytecode' (in Phase 1 it is the same code)"""
+        binary_package = BytecodePacker.pack(python_code)
         return {
-            'bytecode': python_code.encode('utf-8'),
+            'bytecode': binary_package, #python_code.encode('utf-8'),
             'source_hash': hashlib.sha256(python_code.encode()).hexdigest()
         }
 
@@ -574,7 +620,14 @@ class AVAPExecutor:
             return bytecode, interface
     
     async def _execute_command(self, cmd_name: str, bytecode: bytes, properties: List[Any], context: Dict[str, Any], node_full: Dict[str, Any] = None, interface: List[Dict] = None):
-        python_code = bytecode.decode('utf-8')
+        #python_code = bytecode.decode('utf-8')
+
+        try:
+            python_code = BytecodePacker.unpack(bytecode)
+        except Exception as e:
+            # Fatal error if integrity check fails
+            print(f"[SECURITY ALERT] Bytecode processing error for {cmd_name}: {e}")
+            raise RuntimeError(f"Integrity failure in command: {cmd_name}")
         
         # 1. "We create a robust prop_dict with all possible aliases.
         prop_dict = {str(i): v for i, v in enumerate(properties)}
