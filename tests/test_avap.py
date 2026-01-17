@@ -7,21 +7,25 @@ from tornado.web import Application
 
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
-from main import AVAPExecutor, ExecuteHandler
+from main import AVAPExecutor, ExecuteHandler, CompileHandler
 import asyncpg
 
 class TestAVAPFlow(AsyncHTTPTestCase):
     def get_app(self):
+        if not hasattr(self, 'executor_obj'):
+            self.executor_obj = AVAPExecutor(None)
         return Application([
             (r"/api/v1/execute", ExecuteHandler, dict(executor=self)),
+            (r"/api/v1/compile", CompileHandler, dict(executor=self.executor_obj)),
         ])
 
     def setUp(self):
         super().setUp()
         self.db_url = os.getenv("DB_URL", "postgresql://postgres:password@localhost:5432/avap_db")
         self.pool = self.io_loop.run_sync(lambda: asyncpg.create_pool(self.db_url))
-        self.executor_obj = AVAPExecutor(self.pool)
-
+        #self.executor_obj = AVAPExecutor(self.pool)
+        self.executor_obj.db_pool = self.pool
+        
     def tearDown(self):
         self.io_loop.run_sync(self.pool.close)
         super().tearDown()
@@ -225,9 +229,30 @@ class TestAVAPFlow(AsyncHTTPTestCase):
         # En los logs de stdout deberías ver "Direct script optimization skipped" 
         # o el resultado de la optimización si el motor lo soporta.
 
-    """
     @gen_test
-    async def test_11_bytecode_persistence_and_security(self):
+    async def test_11_execute_handler_inline_optimization(self):
+        """Verifica la optimización 'on-the-fly' de scripts complejos"""
+        script = """
+        a = 10
+        b = 20
+        c = a + b
+        if(c, 30, ==)
+            addVar('final_val', "optimizacion_ok")
+        end()
+        addResult('final_val')
+        """
+        payload = {"script": script, "variables": {}}
+        response = await self.http_client.fetch(
+            self.get_url("/api/v1/execute"), 
+            method="POST", 
+            body=json.dumps(payload)
+        )
+        data = json.loads(response.body)
+        assert data["result"]["final_val"] == "optimizacion_ok"
+
+    
+    @gen_test
+    async def test_12_bytecode_persistence_and_security(self):
         
         cmd_name = "test_custom_cmd"
         script = "addVar('status', 'compiled')\naddResult('status')"
@@ -250,24 +275,4 @@ class TestAVAPFlow(AsyncHTTPTestCase):
             assert row is not None
             assert len(row['bytecode']) > 0  # El bytecode no debe estar vacío
 
-    """
-    @gen_test
-    async def test_12_execute_handler_inline_optimization(self):
-        """Verifica la optimización 'on-the-fly' de scripts complejos"""
-        script = """
-        a = 10
-        b = 20
-        c = a + b
-        if(c, 30, ==)
-            addVar('final_val', "optimizacion_ok")
-        end()
-        addResult('final_val')
-        """
-        payload = {"script": script, "variables": {}}
-        response = await self.http_client.fetch(
-            self.get_url("/api/v1/execute"), 
-            method="POST", 
-            body=json.dumps(payload)
-        )
-        data = json.loads(response.body)
-        assert data["result"]["final_val"] == "optimizacion_ok"
+    
