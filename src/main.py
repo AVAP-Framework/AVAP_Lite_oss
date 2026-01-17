@@ -22,11 +22,41 @@ import asyncpg
 import struct
 import hmac
 import hashlib
+import ast
 
 define("port", default=8888, help="Server Port")
 define("db_url", default="postgresql://postgres:password@postgres/avap_db", 
        help="PostgreSQL URL")
 
+
+import ast
+
+class AVAPOptimizer(ast.NodeTransformer):
+    """
+    Transformador de AST para optimizar el código antes de compilarlo.
+    """
+    def visit_BinOp(self, node):
+        # Intentamos resolver operaciones constantes (Constant Folding)
+        self.generic_visit(node)
+        if isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant):
+            try:
+                # Si ambos lados son números, operamos en tiempo de compilación
+                new_val = eval(compile(ast.Expression(node), "", "eval"))
+                return ast.Constant(value=new_val)
+            except:
+                return node
+        return node
+
+    def visit_If(self, node):
+        # Eliminación de código muerto simple (Dead Code Elimination)
+        self.generic_visit(node)
+        if isinstance(node.test, ast.Constant):
+            if node.test.value: # if(True)
+                return node.body
+            else: # if(False)
+                return node.orelse
+        return node
+    
 class BytecodePacker:
     # Header constants
     MAGIC = b'AVAP'  # File identification magic number
@@ -662,7 +692,19 @@ class ExecuteHandler(tornado.web.RequestHandler):
             if not script:
                 raise ValueError("Script cannot be empty")
             
-            result = await self.executor.execute_script(script, variables, req=self)
+
+            try:
+                tree = ast.parse(script)
+                optimizer = AVAPOptimizer()
+                optimized_tree = optimizer.visit(tree)
+                ast.fix_missing_locations(optimized_tree)
+                script_para_ejecutar = ast.unparse(optimized_tree)
+            except Exception as e:
+                # If optimization fails, use the original for safety.
+                print(f"Direct script optimization skipped: {e}")
+                script_para_ejecutar = script
+            
+            result = await self.executor.execute_script(script_para_ejecutar, variables, req=self)
             
             http_status = 200
 
@@ -700,19 +742,66 @@ class CompileHandler(tornado.web.RequestHandler):
         self.executor = executor
     
     async def post(self):
-        data = json.loads(self.request.body)
-        command_name = data.get("command_name")
-        if not command_name:
-            self.set_status(400)
-            self.write({"error": "command_name is required"})
-            return
+        
         try:
-            if command_name in self.executor.bytecode_cache:
-                del self.executor.bytecode_cache[command_name]
-            bytecode = await self.executor._get_bytecode(command_name)
-            self.write({"success": True, "command": command_name, "bytecode_size": len(bytecode)})
+            data = json.loads(self.request.body)
+
+            script = data.get("script", "")
+            name = data.get("name")
+
+            if not name or not script:
+                    self.set_status(400)
+                    return self.write({"error": "Missing name or script"})
+            """
+            command_name = data.get("command_name")
+            if not command_name:
+                self.set_status(400)
+                self.write({"error": "command_name is required"})
+                return
+            
+            try:
+                if command_name in self.executor.bytecode_cache:
+                    del self.executor.bytecode_cache[command_name]
+                bytecode = await self.executor._get_bytecode(command_name)
+                self.write({"success": True, "command": command_name, "bytecode_size": len(bytecode)})
+            except Exception as e:
+                self.set_status(400)
+                self.write({"error": str(e)})
+            """
+            try:
+                tree = ast.parse(script)
+                # Aplicamos el transformador que definimos antes
+                optimizer = AVAPOptimizer()
+                optimized_tree = optimizer.visit(tree)
+                ast.fix_missing_locations(optimized_tree)
+                final_script = ast.unparse(optimized_tree)
+            except Exception as e:
+                # Fallback: si falla la optimización, usamos el original
+                print(f"Optimization skipped: {e}")
+                final_script = script
+
+            # --- EMPAQUETADO Y PERSISTENCIA ---
+            bytecode = BytecodePacker.pack(final_script)
+            
+            script_hash = hashlib.sha256(final_script.encode()).hexdigest()
+            
+            async with self.executor.db_pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO avap_bytecode (command_name, bytecode, version, compiled_at, source_hash)
+                    VALUES ($1, $2, 1, NOW(), $3)
+                    ON CONFLICT (command_name) 
+                    DO UPDATE SET bytecode = $2, compiled_at = NOW(), source_hash = $3
+                """, name, bytecode, script_hash)
+
+            self.write({
+                "status": "optimized & compiled",
+                "name": name,
+                "original_chars": len(script),
+                "optimized_chars": len(final_script)
+            })
+
         except Exception as e:
-            self.set_status(400)
+            self.set_status(500)
             self.write({"error": str(e)})
 
 # ========== MAIN SERVER ==========

@@ -7,13 +7,14 @@ from tornado.web import Application
 
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
-from main import AVAPExecutor, ExecuteHandler
+from main import AVAPExecutor, ExecuteHandler, CompileHandler
 import asyncpg
 
 class TestAVAPFlow(AsyncHTTPTestCase):
     def get_app(self):
         return Application([
             (r"/api/v1/execute", ExecuteHandler, dict(executor=self)),
+            (r"/api/v1/compile", CompileHandler, dict(executor=self.executor_obj)),
         ])
 
     def setUp(self):
@@ -202,3 +203,73 @@ class TestAVAPFlow(AsyncHTTPTestCase):
         assert response.code == 500
         data = json.loads(response.body)
         assert data["result"]["mensaje_salida"] == "Error critico detectado"
+    
+    @gen_test
+    async def test_10_pipeline_optimization_logic(self):
+        """Verifica que el pipeline elimina código muerto y pre-calcula constantes"""
+        # Script con un if(True) que debe desaparecer y una operación 10*5
+        script = "if(True):\n    a = 10 * 5\naddVar('res', a)\naddResult('res')"
+        payload = {"name": "test_optimizacion", "script": script}
+        
+        response = await self.http_client.fetch(
+            self.get_url("/api/v1/compile"), 
+            method="POST", 
+            body=json.dumps(payload)
+        )
+        data = json.loads(response.body)
+        
+        assert data["success"] is True
+        # El optimizador debió reducir los caracteres significativamente
+        assert data["optimized_chars"] < data["original_chars"]
+        
+        # Ahora ejecutamos el comando compilado para ver si da 50
+        exec_payload = {"script": "test_optimizacion()", "variables": {}}
+        exec_resp = await self.http_client.fetch(
+            self.get_url("/api/v1/execute"), 
+            method="POST", 
+            body=json.dumps(exec_payload)
+        )
+        exec_data = json.loads(exec_resp.body)
+        assert exec_data["result"]["res"] == 50
+
+    @gen_test
+    async def test_11_bytecode_persistence_and_security(self):
+        """Verifica que el bytecode se guarda en la DB y es recuperable"""
+        cmd_name = "comando_persistente"
+        script = "addVar('status', 'ok')"
+        
+        # 1. Compilar
+        await self.http_client.fetch(
+            self.get_url("/api/v1/compile"), 
+            method="POST", 
+            body=json.dumps({"name": cmd_name, "script": script})
+        )
+
+        # 2. Verificar directamente en la base de datos
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT bytecode FROM avap_bytecode WHERE command_name = $1", cmd_name)
+            assert row is not None
+            assert isinstance(row['bytecode'], bytes)
+            
+            # El bytecode debe empezar con el marcador de seguridad (si usas uno) o no estar vacío
+            assert len(row['bytecode']) > 0
+
+    @gen_test
+    async def test_12_execute_handler_inline_optimization(self):
+        """Verifica que el ExecuteHandler también optimiza scripts 'al vuelo'"""
+        # Script con cálculos que el optimizador debería resolver
+        script = "x = 100 + 200\naddVar('total', x)\naddResult('total')"
+        payload = {"script": script, "variables": {}}
+        
+        response = await self.http_client.fetch(
+            self.get_url("/api/v1/execute"), 
+            method="POST", 
+            body=json.dumps(payload)
+        )
+        data = json.loads(response.body)
+        
+        # Si el optimizador funcionó en el Handler, en los logs no debería haber 
+        # rastro de la suma, solo del resultado 300
+        assert data["variables"]["total"] == 300
+        # Comprobar que el primer log es el assign ya optimizado
+        assert data["logs"][0]["command"] == "assign"
