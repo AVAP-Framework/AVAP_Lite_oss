@@ -225,7 +225,7 @@ class TestAVAPFlow(AsyncHTTPTestCase):
         # En los logs de stdout deberías ver "Direct script optimization skipped" 
         # o el resultado de la optimización si el motor lo soporta.
 
-"""
+    """
     @gen_test
     async def test_11_bytecode_persistence_and_security(self):
         
@@ -250,7 +250,7 @@ class TestAVAPFlow(AsyncHTTPTestCase):
             assert row is not None
             assert len(row['bytecode']) > 0  # El bytecode no debe estar vacío
 
-"""
+    """
     @gen_test
     async def test_12_execute_handler_inline_optimization(self):
         """Verifica la optimización 'on-the-fly' de scripts complejos"""
