@@ -224,3 +224,27 @@ class TestAVAPFlow(AsyncHTTPTestCase):
         assert data["result"]["resultado_opt"] == 100
         # En los logs de stdout deberías ver "Direct script optimization skipped" 
         # o el resultado de la optimización si el motor lo soporta.
+
+    @gen_test
+    async def test_11_bytecode_persistence_and_security(self):
+        """Verifica el almacenamiento de bytecode en la base de datos"""
+        cmd_name = "test_custom_cmd"
+        script = "addVar('status', 'compiled')\naddResult('status')"
+        
+        # 1. Llamamos al endpoint de compilación
+        compile_payload = {"name": cmd_name, "script": script}
+        response = await self.http_client.fetch(
+            self.get_url("/api/v1/compile"), 
+            method="POST", 
+            body=json.dumps(compile_payload)
+        )
+        assert response.code == 200
+        
+        # 2. Verificamos que se guardó en PostgreSQL
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT bytecode FROM avap_bytecode WHERE command_name = $1", 
+                cmd_name
+            )
+            assert row is not None
+            assert len(row['bytecode']) > 0  # El bytecode no debe estar vacío
