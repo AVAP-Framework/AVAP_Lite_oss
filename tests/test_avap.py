@@ -106,30 +106,40 @@ class TestAVAPFlow(AsyncHTTPTestCase):
 
     @gen_test
     async def test_2_conditionals_if_else(self):
-        """Prueba de bloques if/else nativos del motor AVAP"""
-        # El uso de clean_script permite escribir el script de forma legible dentro del test
-        script = self.clean_script("""
-            addVar('rol', 'admin')
-            if('rol', 'admin', '=')
-                addVar('acceso', 'concedido')
-            else()
-                addVar('acceso', 'denegado')
-            end()
-            addResult('acceso')
-        """)
+        """Prueba de bloques if/else nativos siguiendo el formato exacto de AVAP"""
         
-        payload = {"script": script, "variables": {}}
+        # 1. Definimos el script exactamente como en tu curl
+        # Nota: Usamos addParam para capturar 'user' de la URL y mapearlo a 'usuario'
+        script = (
+            "addParam(user, usuario)\n"
+            "if(usuario, \"Rafa\", =)\n"
+            "  addVar(mensaje, \"Bienvenido Admin\")\n"
+            "else()\n"
+            "  addVar(mensaje, \"Acceso como Invitado\")\n"
+            "end()\n"
+            "addResult(mensaje)"
+        )
         
+        payload = {
+            "script": script,
+            "variables": {}
+        }
+        
+        # 2. Construimos la URL con el parámetro ?user=Rafa
+        url = self.get_url("/api/v1/execute?user=Rafa")
+        
+        # 3. Realizamos la petición
         response = await self.http_client.fetch(
-            self.get_url("/api/v1/execute"), 
+            url, 
             method="POST", 
             body=json.dumps(payload),
             headers={"Content-Type": "application/json"}
         )
         
+        # 4. Validaciones
         assert response.code == 200
         data = json.loads(response.body)
         
-        # Validamos la lógica del condicional ejecutado
-        assert data["variables"]["acceso"] == "concedido"
-        assert data["result"]["acceso"] == "concedido"
+        # Según el script, el resultado debe ser "Bienvenido Admin"
+        assert data["variables"]["mensaje"] == "Bienvenido Admin"
+        assert data["result"]["mensaje"] == "Bienvenido Admin"
