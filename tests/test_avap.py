@@ -60,7 +60,7 @@ class TestAVAPFlow(AsyncHTTPTestCase):
         return textwrap.dedent(script).strip()
 
     @gen_test
-    async def test_1_simple_assignment_and_result(self):
+    async def test_0_simple_assignment_and_result(self):
         script = self.clean_script("""
             x = 10
             y = 20
@@ -79,4 +79,57 @@ class TestAVAPFlow(AsyncHTTPTestCase):
         data = json.loads(response.body)
         assert data["variables"]["res"] == 30
 
-    
+    @gen_test
+    async def test_1_simple_assignment_and_result(self):
+        """Prueba básica de addVar con tipos numéricos y addResult"""
+        # Usamos comillas explícitas para evitar cualquier indentación accidental en la primera línea
+        script = "addVar('numero', 123.45)\naddResult('numero')"
+        
+        payload = {
+            "script": script,
+            "variables": {}
+        }
+        
+        response = await self.http_client.fetch(
+            self.get_url("/api/v1/execute"), 
+            method="POST", 
+            body=json.dumps(payload),
+            headers={"Content-Type": "application/json"}
+        )
+        
+        assert response.code == 200
+        data = json.loads(response.body)
+        
+        # Verificamos que los valores coincidan
+        assert data["variables"]["numero"] == 123.45
+        assert data["result"]["numero"] == 123.45
+
+    @gen_test
+    async def test_2_conditionals_if_else(self):
+        """Prueba de bloques if/else nativos del motor AVAP"""
+        # El uso de clean_script permite escribir el script de forma legible dentro del test
+        script = self.clean_script("""
+            addVar('rol', 'admin')
+            if('rol', 'admin', '=')
+                addVar('acceso', 'concedido')
+            else()
+                addVar('acceso', 'denegado')
+            end()
+            addResult('acceso')
+        """)
+        
+        payload = {"script": script, "variables": {}}
+        
+        response = await self.http_client.fetch(
+            self.get_url("/api/v1/execute"), 
+            method="POST", 
+            body=json.dumps(payload),
+            headers={"Content-Type": "application/json"}
+        )
+        
+        assert response.code == 200
+        data = json.loads(response.body)
+        
+        # Validamos la lógica del condicional ejecutado
+        assert data["variables"]["acceso"] == "concedido"
+        assert data["result"]["acceso"] == "concedido"
