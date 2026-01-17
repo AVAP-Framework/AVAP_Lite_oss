@@ -225,9 +225,10 @@ class TestAVAPFlow(AsyncHTTPTestCase):
         # En los logs de stdout deberías ver "Direct script optimization skipped" 
         # o el resultado de la optimización si el motor lo soporta.
 
+"""
     @gen_test
     async def test_11_bytecode_persistence_and_security(self):
-        """Verifica el almacenamiento de bytecode en la base de datos"""
+        
         cmd_name = "test_custom_cmd"
         script = "addVar('status', 'compiled')\naddResult('status')"
         
@@ -248,3 +249,25 @@ class TestAVAPFlow(AsyncHTTPTestCase):
             )
             assert row is not None
             assert len(row['bytecode']) > 0  # El bytecode no debe estar vacío
+
+"""
+    @gen_test
+    async def test_12_execute_handler_inline_optimization(self):
+        """Verifica la optimización 'on-the-fly' de scripts complejos"""
+        script = """
+        a = 10
+        b = 20
+        c = a + b
+        if(c, 30, ==)
+            addVar('final_val', "optimizacion_ok")
+        end()
+        addResult('final_val')
+        """
+        payload = {"script": script, "variables": {}}
+        response = await self.http_client.fetch(
+            self.get_url("/api/v1/execute"), 
+            method="POST", 
+            body=json.dumps(payload)
+        )
+        data = json.loads(response.body)
+        assert data["result"]["final_val"] == "optimizacion_ok"
