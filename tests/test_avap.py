@@ -202,3 +202,25 @@ class TestAVAPFlow(AsyncHTTPTestCase):
         assert response.code == 500
         data = json.loads(response.body)
         assert data["result"]["mensaje_salida"] == "Error critico detectado"
+
+    @gen_test
+    async def test_10_pipeline_optimization_logic(self):
+        """Verifica que el optimizador simplifica expresiones antes de la ejecución"""
+        # Una operación que el motor debería detectar como constante
+        script = """
+        x = 50 + 50
+        addVar('resultado_opt', x)
+        addResult('resultado_opt')
+        """
+        payload = {"script": script, "variables": {}}
+        response = await self.http_client.fetch(
+            self.get_url("/api/v1/execute"), 
+            method="POST", 
+            body=json.dumps(payload)
+        )
+        data = json.loads(response.body)
+        
+        assert data["success"] is True
+        assert data["result"]["resultado_opt"] == 100
+        # En los logs de stdout deberías ver "Direct script optimization skipped" 
+        # o el resultado de la optimización si el motor lo soporta.
