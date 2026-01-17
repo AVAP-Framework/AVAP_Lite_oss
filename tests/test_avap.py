@@ -5,7 +5,6 @@ import sys
 from tornado.testing import AsyncHTTPTestCase, gen_test
 from tornado.web import Application
 
-# Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from main import AVAPExecutor, ExecuteHandler, CompileHandler
 import asyncpg
@@ -13,7 +12,6 @@ import asyncpg
 class TestAVAPFlow(AsyncHTTPTestCase):
     def get_app(self):
         if not hasattr(self, 'executor_obj'):
-            self.db_url = os.getenv("DB_URL", "postgresql://postgres:password@localhost:5432/avap_db")
             self.executor_obj = AVAPExecutor(None) 
 
         return Application([
@@ -23,12 +21,14 @@ class TestAVAPFlow(AsyncHTTPTestCase):
 
     def setUp(self):
         self.db_url = os.getenv("DB_URL", "postgresql://postgres:password@localhost:5432/avap_db")
-        self.pool = self.io_loop.run_sync(lambda: asyncpg.create_pool(self.db_url))
+        loop = self.get_new_ioloop()
+        self.pool = loop.run_sync(lambda: asyncpg.create_pool(self.db_url))
         self.executor_obj.db_pool = self.pool
         super().setUp()
 
     def tearDown(self):
-        self.io_loop.run_sync(self.pool.close)
+        if hasattr(self, 'pool'):
+            self.get_new_ioloop().run_sync(self.pool.close)
         super().tearDown()
 
     async def execute_script(self, script, variables, req=None):
