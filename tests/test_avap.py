@@ -4,36 +4,55 @@ import os
 import sys
 from tornado.testing import AsyncHTTPTestCase, gen_test
 from tornado.web import Application
-
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
-from main import AVAPExecutor, ExecuteHandler, CompileHandler
 import asyncpg
 
-class TestAVAPFlow(AsyncHTTPTestCase):
-    def get_app(self):
-        if not hasattr(self, 'executor_obj'):
-            self.executor_obj = AVAPExecutor(None) 
+# Add src to path
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+from main import AVAPExecutor, ExecuteHandler, CompileHandler
 
+class TestAVAPFlow(AsyncHTTPTestCase):
+    # Usamos variables de clase para persistir el pool entre tests
+    _pool = None
+    _executor = None
+
+    def get_app(self):
+        # Si es el primer test, creamos un executor "vacío"
+        if not TestAVAPFlow._executor:
+            TestAVAPFlow._executor = AVAPExecutor(None)
+            
         return Application([
             (r"/api/v1/execute", ExecuteHandler, dict(executor=self)),
-            (r"/api/v1/compile", CompileHandler, dict(executor=self.executor_obj)),
+            (r"/api/v1/compile", CompileHandler, dict(executor=TestAVAPFlow._executor)),
         ])
 
     def setUp(self):
+        # 1. Obtenemos la URL
         self.db_url = os.getenv("DB_URL", "postgresql://postgres:password@localhost:5432/avap_db")
-        loop = self.get_new_ioloop()
-        self.pool = loop.run_sync(lambda: asyncpg.create_pool(self.db_url))
-        self.executor_obj.db_pool = self.pool
+        
+        # 2. Solo creamos el pool si no existe (Singleton pattern para tests)
+        if TestAVAPFlow._pool is None:
+            loop = self.get_new_ioloop()
+            # Limitamos el pool a 1 o 2 conexiones para evitar el error de "too many clients"
+            TestAVAPFlow._pool = loop.run_sync(
+                lambda: asyncpg.create_pool(self.db_url, min_size=1, max_size=2)
+            )
+            TestAVAPFlow._executor.db_pool = TestAVAPFlow._pool
+
+        # 3. Mantenemos referencias locales para compatibilidad con tus tests actuales
+        self.pool = TestAVAPFlow._pool
+        self.executor_obj = TestAVAPFlow._executor
+        
         super().setUp()
 
-    def tearDown(self):
-        if hasattr(self, 'pool'):
-            self.get_new_ioloop().run_sync(self.pool.close)
-        super().tearDown()
+    @classmethod
+    def tearDownClass(cls):
+        # Cerramos el pool una sola vez al terminar todos los tests de la clase
+        if cls._pool:
+            import asyncio
+            asyncio.run(cls._pool.close())
 
     async def execute_script(self, script, variables, req=None):
         return await self.executor_obj.execute_script(script, variables, req=req)
-
     @gen_test
     async def test_1_simple_assignment_and_result(self):
         """Prueba básica de addVar con tipos numéricos y addResult"""
