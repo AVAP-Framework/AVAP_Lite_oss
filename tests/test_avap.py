@@ -12,16 +12,20 @@ import asyncpg
 
 class TestAVAPFlow(AsyncHTTPTestCase):
     def get_app(self):
+        if not hasattr(self, 'executor_obj'):
+            self.db_url = os.getenv("DB_URL", "postgresql://postgres:password@localhost:5432/avap_db")
+            self.executor_obj = AVAPExecutor(None) 
+
         return Application([
             (r"/api/v1/execute", ExecuteHandler, dict(executor=self)),
             (r"/api/v1/compile", CompileHandler, dict(executor=self.executor_obj)),
         ])
 
     def setUp(self):
-        super().setUp()
         self.db_url = os.getenv("DB_URL", "postgresql://postgres:password@localhost:5432/avap_db")
         self.pool = self.io_loop.run_sync(lambda: asyncpg.create_pool(self.db_url))
-        self.executor_obj = AVAPExecutor(self.pool)
+        self.executor_obj.db_pool = self.pool
+        super().setUp()
 
     def tearDown(self):
         self.io_loop.run_sync(self.pool.close)
