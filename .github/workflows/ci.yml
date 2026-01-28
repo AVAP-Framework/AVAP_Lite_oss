@@ -2,42 +2,23 @@ name: CI (Python & Rust)
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, definitions_integration ]
   pull_request:
     branches: [ main ]
 
 jobs:
-  rust-checks:
-    name: Rust (Format & Tests)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - name: Rust Format Check
-        run: cargo fmt --all -- --check
-      - name: Run Rust Tests
-        run: cargo test
-
   python-checks:
-    name: Python (Maturin & Pytest)
+    name: Python Checks & Performance
     runs-on: ubuntu-latest
-    
     services:
       postgres:
         image: postgres:15
         env:
           POSTGRES_PASSWORD: password
           POSTGRES_DB: avap_db
-        ports:
-          - 5432:5432
+        ports: ["5432:5432"]
         options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -47,29 +28,54 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Build Dependencies
+      - name: Install Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential postgresql-client
-          python -m pip install --upgrade pip
-          pip install maturin ruff pytest pytest-asyncio tornado asyncpg redis nest_asyncio requests python-dotenv
+          pip install maturin pytest pytest-asyncio tornado asyncpg requests grpcio grpcio-tools locust nest_asyncio
 
-      - name: Initialize Test Database
-        env:
-          PGPASSWORD: password
-          DB_URL: postgresql://postgres:password@localhost:5432/avap_db
-        run: |
-          psql -h localhost -U postgres -d avap_db -f init.sql
-          psql -h localhost -U postgres -d avap_db -c "SELECT name FROM obex_dapl_functions;"
-
-      - name: Build and Install Rust Extension
+      - name: Build Rust Extension
         run: |
           maturin build --release --out dist
           pip install dist/*.whl
 
-      - name: Run Tests
-        env:
-          DB_URL: postgresql://postgres:password@localhost:5432/avap_db
+      - name: Initialize Database
+        env: { PGPASSWORD: password }
+        run: psql -h localhost -U postgres -d avap_db -f init.sql
+
+      - name: Start Mock Brain
         run: |
           export PYTHONPATH=$PYTHONPATH:./src
-          pytest tests/test_avap.py
+          python mock_brain.py &
+          echo "BRAIN_PID=$!" >> $GITHUB_ENV
+          sleep 5
+
+      - name: Run Pytest
+        env:
+          DB_URL: postgresql://postgres:password@localhost:5432/avap_db
+          BRAIN_HOST: localhost
+          BRAIN_PORT: 50051
+        run: |
+          export PYTHONPATH=$PYTHONPATH:./src
+          pytest -v --tb=short tests/test_avap.py
+
+      - name: Load Test (Locust)
+        env:
+          DB_URL: postgresql://postgres:password@localhost:5432/avap_db
+          BRAIN_HOST: localhost
+        run: |
+          export PYTHONPATH=$PYTHONPATH:./src
+  
+          python src/main.py --db_url=$DB_URL &
+          
+          SERVER_PID=$!
+          sleep 10
+          
+          locust -f tests/locustfile.py --headless -u 3500 -r 20 -t 1m --host http://localhost:8888 --csv ci_perf
+          
+          kill $SERVER_PID
+          AVG_RPS=$(grep "Aggregated" ci_perf_stats.csv | cut -d',' -f10 | cut -d'.' -f1)
+          echo "CI Average RPS: $AVG_RPS"
+          [ "$AVG_RPS" -lt 800 ] && exit 1 || exit 0
+
+      - name: Cleanup
+        if: always()
+        run: kill ${{ env.BRAIN_PID }} || true

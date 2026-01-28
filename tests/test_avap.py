@@ -2,6 +2,7 @@ import pytest
 import json
 import os
 import sys
+import tornado
 from tornado.testing import AsyncHTTPTestCase, gen_test
 from tornado.web import Application
 
@@ -14,8 +15,13 @@ class TestAVAPFlow(AsyncHTTPTestCase):
     def get_app(self):
         if not hasattr(self, 'executor_obj'):
             self.executor_obj = AVAPExecutor(None)
+            try:
+                self.io_loop.run_sync(self.executor_obj.sync_full_catalog)
+            except Exception as e:
+                print(f"Warning: Initial gRPC sync failed: {e}")
+
         return Application([
-            (r"/api/v1/execute", ExecuteHandler, dict(executor=self)),
+            (r"/api/v1/execute", ExecuteHandler, dict(executor=self.executor_obj)),
             (r"/api/v1/compile", CompileHandler, dict(executor=self.executor_obj)),
         ])
 
@@ -25,6 +31,11 @@ class TestAVAPFlow(AsyncHTTPTestCase):
         self.pool = self.io_loop.run_sync(lambda: asyncpg.create_pool(self.db_url))
         #self.executor_obj = AVAPExecutor(self.pool)
         self.executor_obj.db_pool = self.pool
+
+        self.executor_obj.metrics = {
+        "requests_total": 0, "requests_success": 0, "requests_error": 0,
+        "rejects_concurrency": 0, "rejects_timeout": 0, "execution_time_ms": 0.0
+    }
         
     def tearDown(self):
         self.io_loop.run_sync(self.pool.close)
@@ -40,7 +51,13 @@ class TestAVAPFlow(AsyncHTTPTestCase):
             "script": "addVar(numero, 123.45)\naddResult(numero)",
             "variables": {}
         }
-        response = await self.http_client.fetch(self.get_url("/api/v1/execute"), method="POST", body=json.dumps(payload), headers={"Content-Type": "application/json"})
+        try:
+            response = await self.http_client.fetch(self.get_url("/api/v1/execute"), method="POST", body=json.dumps(payload), headers={"Content-Type": "application/json"})
+        except tornado.httpclient.HTTPClientError as e:
+            if e.response:
+                print(f"DEBUG ERROR BODY: {e.response.body}") # Esto te dirá qué línea del Mock falló
+            raise e
+
         data = json.loads(response.body)
         assert data["variables"]["numero"] == 123.45
         assert data["result"]["numero"] == 123.45

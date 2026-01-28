@@ -7,6 +7,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ /app/src/
 
-EXPOSE 8888
+COPY app/ /app/app/
+COPY avap.proto /app/
 
-CMD ["python", "src/main.py"]
+EXPOSE 8888
+ENV PYTHONPATH="/app"
+CMD ["python", "-u", "src/main.py"]

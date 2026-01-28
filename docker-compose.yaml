@@ -1,16 +1,39 @@
 version: '3.8'
+
 services:
   avap-server:
     build: .
+    container_name: avap-lsp
     ports:
       - "8888:8888"
     environment:
-      - DATABASE_URL=postgresql://postgres:password@postgres/avap_db
+
+      - BRAIN_HOST=avap-definition-engine
+      - BRAIN_PORT=50051
+      
+      - DATABASE_URL=postgresql://postgres:password@avap-db-local:5432/avap_db
+
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - API_KEY=avap_secret_key_2026
+
     depends_on:
       - postgres
+    networks:
+      - avap-shared-net
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'      
+          memory: 1G       
+        reservations:
+          cpus: '1.0'      
+          memory: 512M
 
   postgres:
     image: postgres:15-alpine
+    container_name: avap-db-local
     environment:
       - POSTGRES_PASSWORD=password
       - POSTGRES_DB=avap_db
@@ -18,3 +41,10 @@ services:
       - "5432:5432"
     volumes:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - avap-shared-net
+
+networks:
+  avap-shared-net:
+    external:
+      name: avap_definitions_server_avap-net
