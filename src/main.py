@@ -1,70 +1,68 @@
 #!/usr/bin/env python3
+
 """
 AVAP Language Server Lite OSS
 """
+
+import sys
+import os
 import grpc
 import requests
-import tornado.web
 import uuid
 import re
 import asyncio
 import json
-import hashlib
-from datetime import datetime
-from typing import Dict, Any, List
-import base64
 import time
 import gc
-
-gc.set_threshold(7000, 10, 10)
-
-import signal
 import queue
-from concurrent.futures import ThreadPoolExecutor
-import multiprocessing
-from concurrent.futures import ProcessPoolExecutor
-from app.core import avap_pb2
-
-process_executor = ProcessPoolExecutor(max_workers=1)
-
-MAX_WORKERS = 20 
-thread_executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
-execution_semaphore = asyncio.Semaphore(MAX_WORKERS)
-
-import tornado.web
-import tornado.ioloop
-from tornado.options import define, options
-
 import asyncpg
 import struct
 import hmac
 import hashlib
 import ast
+import tornado.web
+import tornado.ioloop
+import random
+from tornado.options import define, options
+from datetime import datetime
+from typing import Dict, Any, List
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
+from app.core import avap_pb2
+from app.core import avap_pb2_grpc
 
-import os
+
+# Garbage collector configuration
+
+gc.set_threshold(7000, 10, 10)
+
+# Process and threads configuration
+
+process_executor = ProcessPoolExecutor(max_workers=1)
+MAX_WORKERS = 20 
+thread_executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+execution_semaphore = asyncio.Semaphore(MAX_WORKERS)
+
 
 # Definition server config
 
 BRAIN_TARGET = '0.0.0.0:50051'
 BRAIN_AUTH_TOKEN = 'avap_secret_key_2026'
-
 BRAIN_HOST = os.getenv('BRAIN_HOST', 'avap-definition-engine')
 BRAIN_PORT = '50051'
 
+# Language Server config
 
 define("port", default=8888, help="Server Port")
 define("db_url", default="postgresql://postgres:password@postgres/avap_db", 
        help="PostgreSQL URL")
 
 
-import ast
+# -------------------------------------------------------------------------------------
 
 class AVAPOptimizer(ast.NodeTransformer):
-    """
-    Transformador de AST para optimizar el código antes de compilarlo.
-    """
+
     def visit_BinOp(self, node):
-        # Constant Folding
         self.generic_visit(node)
         if isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant):
             try:
@@ -89,32 +87,30 @@ class BytecodePacker:
     # Header constants
     MAGIC = b'AVAP'  # File identification magic number
     VERSION = 1      # Protocol version
-    SECRET_KEY = b'avap_secure_signature_key_2026' # HMAC signing key (use Env Var in prod)
+    SECRET_KEY = b'avap_secure_signature_key_2026' # HMAC signing key (env in production)
 
     @classmethod
     def pack(cls, python_code: str) -> bytes:
-        """Encapsulates Python code into a signed binary package."""
+        # Encapsulates Python code into a signed binary package.
         payload = python_code.encode('utf-8')
         # Header: Magic(4b) + Version(2b) + PayloadSize(4b) = 10 bytes
         header = struct.pack('>4sHI', cls.MAGIC, cls.VERSION, len(payload))
-        
         # Digital Signature: HMAC-SHA256 for integrity and authenticity
         signature = hmac.new(cls.SECRET_KEY, header + payload, hashlib.sha256).digest()
-        
         # Structure: [Header][Signature][Payload]
         return header + signature + payload
 
     @classmethod
     def unpack(cls, data: bytes) -> str:
-        """Validates signature and extracts code from binary package."""
-        # Minimum size validation (Header 10b + Signature 32b)
+        # Validate signature and unpack
+        # Minimum size validation
         if len(data) < 42:
-            raise ValueError("Corrupted bytecode: Insufficient size")
+            raise ValueError("Corrupted bytecode: wrong size")
 
         # Extract and validate Header
         magic, version, p_size = struct.unpack('>4sHI', data[:10])
         if magic != cls.MAGIC:
-            raise ValueError("Invalid bytecode: Magic Number mismatch")
+            raise ValueError("Invalid bytecode: wring Magic Number")
         
         # Extract Signature and Payload
         stored_signature = data[10:42]
@@ -123,7 +119,7 @@ class BytecodePacker:
         # Validate Digital Signature
         expected_signature = hmac.new(cls.SECRET_KEY, data[:10] + payload, hashlib.sha256).digest()
         if not hmac.compare_digest(stored_signature, expected_signature):
-            raise ValueError("SECURITY ALERT! Bytecode has been tampered with or signature is invalid")
+            raise ValueError("SECURITY: Bytecode or signature invalid")
 
         return payload.decode('utf-8')
 
@@ -142,13 +138,13 @@ class FakeConector:
         pass
 
     def get_param(self, name):
-        """Retrieve query or body parameters depending on the request."""
+        # Retrieve query or body parameters depending on the request
         req = self.req
-        # Search in query arguments
+        # Query arguments
         if req and hasattr(req, 'query_arguments'):
             if name.encode() in req.query_arguments:
                 return req.query_arguments[name.encode()][0].decode()
-        # Search in body as JSON
+        # Body as JSON
         if req and hasattr(req, 'body'):
             try:
                 body_data = json.loads(req.body)
@@ -156,7 +152,7 @@ class FakeConector:
                     return body_data[name]
             except:
                 pass
-        # Search in body_arguments (form data)
+        # body_arguments (data)
         if req and hasattr(req, 'body_arguments'):
             if name.encode() in req.body_arguments:
                 return req.body_arguments[name.encode()][0].decode()
@@ -165,10 +161,9 @@ class FakeConector:
 
 # AVAP COMPILER
 class AVAPCompiler:
-    """Minimal compiler - for Phase 1: bytecode = Python code"""
     
     def compile(self, python_code: str, command_name: str) -> Dict[str, Any]:
-        """Compile Python code to 'bytecode' (in Phase 1 it is the same code)"""
+        #Compile definition code to bytecode, temporal until Rust VM
         binary_package = BytecodePacker.pack(python_code)
         return {
             'bytecode': binary_package, #python_code.encode('utf-8'),
@@ -347,14 +342,13 @@ class MetricsHandler(tornado.web.RequestHandler):
         self.write("\n".join(output))
 
 class ScriptBridge:
-    """Static class to inject into the exec namespace."""
+    #Static class to inject into the exec namespace.
     __slots__ = ['conector', 'process_step'] # Memory optimization
     
     def __init__(self, conector, process_step):
         self.conector = conector
         self.process_step = process_step
 class AVAPExecutor:
-    """AVAP command executor"""
     
     def __init__(self, db_pool):
         self.db_pool = db_pool
@@ -377,11 +371,9 @@ class AVAPExecutor:
         self.cache_limit = 1000
 
     def _get_brain_stub(self):
-        """Optimized gRPC initialization post-fork"""
+        #Optimized gRPC initialization post-fork
         if self._stub is None:
-            import grpc
-            from app.core import avap_pb2_grpc
-            
+                   
             # Channel parameters
             options = [
                 ('grpc.keepalive_time_ms', 10000),
@@ -454,10 +446,7 @@ class AVAPExecutor:
         tornado.ioloop.IOLoop.current().add_callback(task)
 
     def _evaluate_condition(self, properties: Dict[str, Any], context: Dict[str, Any]) -> bool:
-        """
-        Evaluates a condition like if(variable, value, comparator)
-        comparator: '=', '!=', '<', '>', '<=', '>='
-        """
+
         var_name = properties.get('variable')
         var_value = properties.get('variableValue')
         comparator = properties.get('comparator', '=')
@@ -504,7 +493,7 @@ class AVAPExecutor:
             except:
                 pass
 
-        # A variable
+        # Variable
         return p
     
 
@@ -591,7 +580,7 @@ class AVAPExecutor:
             # Execute function lines
             for child in func['ast']:
                 res = await self._execute_ast(child, context)
-                # "If a child returned the __return__ packet, we capture the value and break.
+                # If a child returned the __return__ packet, we capture the value and break.
                 if isinstance(res, dict) and "__return__" in res:
                     func_value = res["__return__"]
                     break
@@ -603,7 +592,7 @@ class AVAPExecutor:
             
             return func_value
 
-        # 3. ASSIGNMENTS
+        # ASSIGNMENTS
         elif node_type == 'assign':
             expr = properties[0]
             full_scope = {**context['variables'], **(self.function_local_vars or {})}
@@ -615,12 +604,12 @@ class AVAPExecutor:
                     break
 
             if internal_func:
-                # Extract the content inside the parentheses
+                # Extract the content inside parentheses
                 start_p = expr.find("(") + 1
                 end_p = expr.rfind(")")
                 raw_args = expr[start_p:end_p]
                 
-                # Resolve the arguments (e.g., 10 + 5 = 15)
+                # Resolve the arguments
                 resolved_args = eval(raw_args, {"__builtins__": safe_builtins}, full_scope)
 
                 node_call = {
@@ -640,7 +629,7 @@ class AVAPExecutor:
                 self.function_local_vars[target] = value
             return value
 
-        # 4. DATABASE COMMANDS
+        # OTHER COMMANDS
         else:
             # The parser sent a 'return' redirection.
             if node_type == "return": 
@@ -675,18 +664,17 @@ class AVAPExecutor:
 
 
     async def execute_script(self, script: str, variables: Dict[str, Any], req=None) -> Dict[str, Any]:
-        """Execute full script"""
-
+        
         normalized_script = script.strip()
         script_hash = hashlib.md5(normalized_script.encode()).hexdigest()
 
         if script_hash in self.ast_cache:
             commands = self.ast_cache[script_hash]
         else:
-            # Only parse if unknown.
+            # Only parse if not in cache
             commands = self.parser.parse(normalized_script)
             
-            # Save if space is available.
+            # update cache if space is available.
             if len(self.ast_cache) < self.cache_limit:
                 self.ast_cache[script_hash] = commands
 
@@ -722,7 +710,7 @@ class AVAPExecutor:
                     raise e # this stops execution and returns 400
                 
                 # ACTIVE TRY (level > 0), CATCH AND CONTINUE
-                # Save the error in an special variable to 'exception' be able to read it
+                # Save the error to 'exception' be able to read it
                 self.conector.variables['__last_error__'] = error_msg
                 
                 context['logs'].append({
@@ -736,10 +724,10 @@ class AVAPExecutor:
         return context
     
     async def _get_bytecode(self, command_name: str):
-        """Retrieve the bytecode and the interface (metadata) from the command"""
+    
         if not hasattr(self, 'interface_cache'): self.interface_cache = {}
 
-        # 1. Check local memory cache (L1 Cache)
+        # Check local memory cache (L1 Cache)
         if command_name in self.bytecode_cache:
             bytecode = self.bytecode_cache[command_name]
 
@@ -815,10 +803,6 @@ class AVAPExecutor:
     
     async def _execute_command(self, cmd_name: str, bytecode: bytes, properties: List[Any], context: Dict[str, Any], node_full: Dict[str, Any] = None, interface: List[Dict] = None):
        
-        import grpc
-        import requests
-        import tornado.web
-
         if cmd_name not in self.code_object_cache:
             # Unpack (HMAC)
             python_source = BytecodePacker.unpack(bytecode)
@@ -1018,7 +1002,7 @@ class CompileHandler(tornado.web.RequestHandler):
 # Multi process configuration
 
 def make_app(db_pool, executor):
-    """Creating tornado application"""
+    
     return tornado.web.Application([
         (r"/api/v1/execute", ExecuteHandler, dict(executor=executor)),
         (r"/api/v1/compile", CompileHandler, dict(executor=executor)),
@@ -1028,7 +1012,7 @@ def make_app(db_pool, executor):
     log_function=lambda x: None)
 
 async def run_worker_instance(inherited_sockets):
-    """Logic for each child process."""
+    
 
     gc.set_threshold(50000, 15, 15)
     import nest_asyncio
@@ -1038,10 +1022,9 @@ async def run_worker_instance(inherited_sockets):
     
     try:
         # To ensure not all workers catch the CPU at same time
-        import random
+        
         await asyncio.sleep(random.uniform(0.05, 0.5))
 
-        import asyncpg
         db_pool = await asyncpg.create_pool(options.db_url, min_size=1, max_size=5)
         
         executor = AVAPExecutor(db_pool)
@@ -1066,8 +1049,7 @@ async def run_worker_instance(inherited_sockets):
         sys.exit(1)
 
 if __name__ == "__main__":
-    import sys
-    import os
+
     tornado.options.parse_command_line()
     
     # Master port
